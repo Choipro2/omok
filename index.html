@@ -51,6 +51,13 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--accent)}
 .record{font-size:.9rem;color:var(--muted);font-variant-numeric:tabular-nums}
 #codeIn{width:6.5ch;text-align:center;letter-spacing:.2em;font-family:var(--font-display);font-size:1.3rem}
 .note{font-size:.88rem;color:var(--warn);line-height:1.45}
+.note.ok{color:var(--accent)}
+input[type=password]{font:inherit;font-size:1.1rem;padding:8px 10px;border-radius:10px;border:2px solid var(--line);background:var(--bg);color:var(--fg);width:10ch}
+input[type=password]:focus{outline:none;border-color:var(--accent)}
+.inner{display:flex;flex-direction:column;gap:12px}
+.numgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px}
+.numgrid button{padding:12px 4px;font-size:1.15rem;font-variant-numeric:tabular-nums}
+.numgrid button[aria-pressed=true]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
 
 /* 게임 화면 */
 .players{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -124,6 +131,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
           <button id="joinRoom">들어가기</button>
         </div>
         <p class="note" id="onlineNote" hidden></p>
+        <button id="openTeacher" hidden>학생 승인 관리</button>
       </div>
 
       <div class="mode">
@@ -132,6 +140,29 @@ button:disabled{opacity:.45;cursor:not-allowed}
         <p>컴퓨터 한 대에서 짝과 번갈아 클릭하며 둬요.</p>
         <button class="primary" id="startLocal">같이 시작</button>
       </div>
+    </div>
+  </section>
+
+  <!-- ===== 선생님: 대전 승인 ===== -->
+  <section id="teacher" class="wrap" style="padding:0" hidden>
+    <header>
+      <button class="back" id="teacherBack">← 처음으로</button>
+      <h2>친구와 대전 승인</h2>
+    </header>
+    <div class="namebox" id="pinBox">
+      <label for="pinIn">선생님 비밀번호</label>
+      <input type="password" id="pinIn" autocomplete="off">
+      <button class="primary" id="pinOk">확인</button>
+      <p class="note" id="pinMsg" hidden></p>
+    </div>
+    <div id="approveBox" class="inner" hidden>
+      <p class="muted">초록색 번호의 학생만 방을 만들거나 들어갈 수 있어요. 번호를 눌러 켜고 끄세요.</p>
+      <div class="row">
+        <button id="allOn">모두 허락</button>
+        <button id="allOff">모두 끄기</button>
+        <span class="record" id="approveCount"></span>
+      </div>
+      <div class="numgrid" id="numGrid"></div>
     </div>
   </section>
 
@@ -180,7 +211,7 @@ const SUPABASE_ANON_KEY = '';
     set(k, v){ try{ localStorage.setItem('omok.'+k, JSON.stringify(v)); }catch(e){} }
   };
   // 우리 반 출석번호 (1~16번, 41~53번, 52번 제외) + 선생님
-  const nums = [...Array(16)].map((_,i)=>i+1).concat([41,42,43,44,45,46,47,48,49,50,51,53]);
+  const nums = window.CLASS_NUMS = [...Array(16)].map((_,i)=>i+1).concat([41,42,43,44,45,46,47,48,49,50,51,53]);
   for(const label of nums.map(n=>n+'번').concat(['선생님'])){
     const o = document.createElement('option'); o.value = o.textContent = label; $('myName').appendChild(o);
   }
@@ -440,20 +471,85 @@ const SUPABASE_ANON_KEY = '';
   const onlineReady = !!(SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase);
   let sb = null, ch = null;
   if(onlineReady){ try{ sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }catch(e){ sb = null; } }
-  if(!sb){
-    $('createRoom').disabled = true; $('joinRoom').disabled = true; $('codeIn').disabled = true;
-    $('onlineNote').hidden = false;
-    $('onlineNote').textContent = '선생님이 학교 주소에 올리면 열리는 기능이에요. 지금은 컴퓨터와 연습, 한 컴퓨터로 둘이서를 이용하세요.';
+  // ---- 선생님 승인 확인 ----
+  function setOnline(enabled, msg, ok){
+    $('createRoom').disabled = !enabled; $('joinRoom').disabled = !enabled; $('codeIn').disabled = !enabled;
+    $('onlineNote').hidden = !msg; $('onlineNote').textContent = msg || ''; $('onlineNote').classList.toggle('ok', !!ok);
   }
+  async function isApproved(name){
+    if(name==='선생님') return true;
+    const {data, error} = await sb.from('omok_players').select('approved').eq('num', name).maybeSingle();
+    if(error) throw error;
+    return !!(data && data.approved);
+  }
+  let checkSeq = 0;
+  async function checkApproval(){
+    $('openTeacher').hidden = !(sb && $('myName').value==='선생님');
+    if(!sb){ setOnline(false, '준비 중이에요. 지금은 컴퓨터와 연습하거나 한 컴퓨터로 둘이서 둬 주세요.'); return false; }
+    const name = $('myName').value;
+    if(!name){ setOnline(false, '먼저 위에서 내 번호를 골라 주세요.'); return false; }
+    const seq = ++checkSeq;
+    setOnline(false, '선생님 허락을 확인하는 중…');
+    try{
+      const ok = await isApproved(name);
+      if(seq!==checkSeq) return ok;
+      if(ok) setOnline(true, name==='선생님' ? '' : '선생님이 허락했어요. 친구와 대전할 수 있어요!', true);
+      else setOnline(false, '선생님이 허락하면 열려요.');
+      return ok;
+    }catch(e){ if(seq===checkSeq) setOnline(false, '확인하지 못했어요. 인터넷을 확인하고 번호를 다시 골라 보세요.'); return false; }
+  }
+  $('myName').addEventListener('change', checkApproval);
+  checkApproval();
   $('codeIn').addEventListener('input', ()=>{ $('codeIn').value = $('codeIn').value.replace(/\D/g,'').slice(0,4); });
 
-  $('createRoom').onclick = ()=>{ if(!$('myName').value.trim()){ $('myName').focus(); return; }
+  $('createRoom').onclick = async ()=>{ if(!$('myName').value){ $('myName').focus(); return; }
+    if(!(await checkApproval())) return;
     startOnline(String(Math.floor(1000+Math.random()*9000)), 'host'); };
-  $('joinRoom').onclick = ()=>{
-    if(!$('myName').value.trim()){ $('myName').focus(); return; }
+  $('joinRoom').onclick = async ()=>{
+    if(!$('myName').value){ $('myName').focus(); return; }
     const code = $('codeIn').value; if(code.length!==4){ $('codeIn').focus(); return; }
+    if(!(await checkApproval())) return;
     startOnline(code, null);
   };
+
+  // ---- 선생님 승인 화면 ----
+  let pin = '';
+  try{ pin = sessionStorage.getItem('omok.pin') || ''; }catch(e){}
+  const approved = new Set();
+  $('openTeacher').onclick = ()=>{ $('home').hidden = true; $('teacher').hidden = false; if(pin) tryPin(pin); else $('pinIn').focus(); };
+  $('teacherBack').onclick = ()=>{ $('teacher').hidden = true; $('home').hidden = false; checkApproval(); };
+  $('pinOk').onclick = ()=> tryPin($('pinIn').value);
+  $('pinIn').addEventListener('keydown', e=>{ if(e.key==='Enter') tryPin($('pinIn').value); });
+  async function tryPin(v){
+    $('pinMsg').hidden = true;
+    const {data, error} = await sb.rpc('omok_check_pin', {p_pin: v});
+    if(error || !data){ pin=''; $('pinMsg').hidden=false; $('pinMsg').textContent = error ? '확인하지 못했어요. 잠시 뒤 다시 해 보세요.' : '비밀번호가 맞지 않아요.'; return; }
+    pin = v; try{ sessionStorage.setItem('omok.pin', v); }catch(e){}
+    $('pinBox').hidden = true; $('approveBox').hidden = false;
+    await loadApprovals();
+  }
+  async function loadApprovals(){
+    const {data} = await sb.from('omok_players').select('num,approved');
+    approved.clear(); (data||[]).forEach(r=>{ if(r.approved) approved.add(r.num); });
+    renderGrid();
+  }
+  function renderGrid(){
+    const g = $('numGrid'); g.textContent = '';
+    for(const n of window.CLASS_NUMS){
+      const label = n+'번', b = document.createElement('button');
+      b.textContent = label; b.setAttribute('aria-pressed', approved.has(label));
+      b.onclick = ()=> setApproval([label], !approved.has(label));
+      g.appendChild(b);
+    }
+    $('approveCount').textContent = `허락 ${approved.size}명 / ${window.CLASS_NUMS.length}명`;
+  }
+  async function setApproval(labels, on){
+    const {error} = await sb.rpc('omok_set_approval', {p_pin: pin, p_nums: labels, p_approved: on});
+    if(error){ $('approveCount').textContent = '저장하지 못했어요. 다시 눌러 주세요.'; return; }
+    labels.forEach(l=> on ? approved.add(l) : approved.delete(l)); renderGrid();
+  }
+  $('allOn').onclick = ()=> setApproval(window.CLASS_NUMS.map(n=>n+'번'), true);
+  $('allOff').onclick = ()=> setApproval(window.CLASS_NUMS.map(n=>n+'번'), false);
 
   function startOnline(code, role){
     G = {mode:'online', code, role, me:'p'+Math.random().toString(36).slice(2,10), partner:false,
