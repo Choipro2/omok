@@ -37,7 +37,8 @@ p{margin:0}
 .namebox label{font-family:var(--font-display);font-size:1.15rem}
 select{font:inherit;font-size:1.1rem;padding:8px 10px;border-radius:10px;border:2px solid var(--line);background:var(--bg);color:var(--fg);min-width:0}
 select:focus{outline:none;border-color:var(--accent)}
-#myName{flex:1;min-width:160px}
+.picker{display:flex;gap:8px;flex:1;flex-wrap:wrap;min-width:0}
+.picker select{flex:1;min-width:88px}
 .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 @media (max-width:680px){.modes{grid-template-columns:1fr}}
 .mode{background:var(--panel);border:2px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
@@ -98,8 +99,13 @@ button:disabled,button.primary:disabled{opacity:1;background:var(--line);border-
     </header>
 
     <div class="namebox">
-      <label for="myName">내 이름</label>
-      <select id="myName"><option value="">번호를 골라 주세요</option></select>
+      <label for="pGrade">내 이름</label>
+      <div class="picker">
+        <select id="pGrade" aria-label="학년"></select>
+        <select id="pClass" aria-label="반"></select>
+        <select id="pNum" aria-label="번호"></select>
+      </div>
+      <input type="hidden" id="myName">
       <div class="sizebox">
         <div class="seg" role="group" aria-label="바둑판 크기">
           <button data-size="9" aria-pressed="true">9줄</button>
@@ -162,6 +168,7 @@ button:disabled,button.primary:disabled{opacity:1;background:var(--line);border-
       <p class="note" id="pinMsg" hidden></p>
     </div>
     <div id="approveBox" class="inner" hidden>
+      <h2 id="classTitle"></h2>
       <p class="muted">초록색 번호의 학생만 방을 만들거나 들어갈 수 있어요. 오목과 바둑에 함께 적용돼요.</p>
       <div class="row">
         <button id="allOn">모두 허락</button>
@@ -360,12 +367,23 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     set(k,v){ try{ localStorage.setItem('baduk.'+k, JSON.stringify(v)); }catch(e){} }
   };
 
-  // 이름 목록 (오목과 같은 저장값 공유)
-  const nums=[...Array(16)].map((_,i)=>i+1).concat([41,42,43,44,45,46,47,48,49,50,51,53]);
-  for(const label of nums.map(v=>v+'번').concat(['선생님'])){ const o=document.createElement('option'); o.value=o.textContent=label; $('myName').appendChild(o); }
-  let savedName=''; try{ savedName = JSON.parse(localStorage.getItem('omok.name')||'""'); }catch(e){}
-  if([...$('myName').options].some(o=>o.value===savedName)) $('myName').value=savedName;
-  $('myName').addEventListener('change', ()=>{ try{ localStorage.setItem('omok.name', JSON.stringify($('myName').value)); }catch(e){} });
+  // ---- 내 이름: 학년·반·번호 → 학생 "4201", 선생님 "선생님402" ----
+  const NUM_MAX = 60;
+  function fillSel(id, first, items){ const s=$(id); s.textContent='';
+    for(const [v,t] of [['',first]].concat(items)){ const o=document.createElement('option'); o.value=v; o.textContent=t; s.appendChild(o); } }
+  fillSel('pGrade','학년',[1,2,3,4,5,6].map(g=>[String(g),g+'학년']));
+  fillSel('pClass','반',[1,2,3,4,5,6,7,8,9].map(c=>[String(c),c+'반']));
+  fillSel('pNum','번호',[...Array(NUM_MAX)].map((_,i)=>[String(i+1),(i+1)+'번']).concat([['T','선생님']]));
+  function composeName(){ const g=$('pGrade').value, c=$('pClass').value, n=$('pNum').value;
+    if(!g||!c||!n) return ''; return n==='T' ? `선생님${g}0${c}` : `${g}${c}${n.padStart(2,'0')}`; }
+  const classOf = name => { const m=/^선생님(\d)0(\d)$/.exec(name||''); return m ? {g:m[1], c:m[2]} : null; };
+  (function restore(){ let v=''; try{ v=JSON.parse(localStorage.getItem('omok.name2')||'""'); }catch(e){}
+    let m; if((m=/^선생님(\d)0(\d)$/.exec(v))){ $('pGrade').value=m[1]; $('pClass').value=m[2]; $('pNum').value='T'; }
+    else if((m=/^(\d)(\d)(\d\d)$/.exec(v))){ $('pGrade').value=m[1]; $('pClass').value=m[2]; $('pNum').value=String(+m[3]); }
+    $('myName').value=composeName(); })();
+  ['pGrade','pClass','pNum'].forEach(id=>$(id).addEventListener('change',()=>{
+    $('myName').value=composeName(); try{ localStorage.setItem('omok.name2', JSON.stringify($('myName').value)); }catch(e){}
+    $('myName').dispatchEvent(new Event('change')); }));
   const myName = () => $('myName').value || '나';
 
   let size=store.get('size',9), level=0, meColor=1;
@@ -608,7 +626,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     $('onlineNote').hidden=!msg; $('onlineNote').textContent=msg||''; $('onlineNote').classList.toggle('ok', !!ok);
   }
   async function isApproved(name){
-    if(name==='선생님'){
+    if(name.startsWith('선생님')){
       let saved=''; try{ saved=sessionStorage.getItem('omok.pin')||''; }catch(e){}
       if(!saved) return false;
       const r=await sbc.rpc('omok_check_pin',{p_pin:saved}); return !r.error && r.data===true;
@@ -618,24 +636,24 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
   }
   let checkSeq=0;
   async function checkApproval(){
-    $('openTeacher').hidden = !(sbc && $('myName').value==='선생님');
+    $('openTeacher').hidden = !(sbc && $('myName').value.startsWith('선생님'));
     if(!sbc){ setOnline(false,'준비 중이에요. 지금은 컴퓨터와 연습하거나 한 컴퓨터로 둘이서 둬 주세요.'); return false; }
     const name=$('myName').value;
-    if(!name){ setOnline(false,'먼저 위에서 내 번호를 골라 주세요.'); return false; }
+    if(!name){ setOnline(false,'먼저 위에서 학년·반·번호를 골라 주세요.'); return false; }
     const seq=++checkSeq; setOnline(false,'선생님 허락을 확인하는 중…');
     try{
       const ok=await isApproved(name); if(seq!==checkSeq) return ok;
-      if(ok) setOnline(true, name==='선생님'?'':'선생님이 허락했어요. 친구와 대전할 수 있어요!', true);
-      else setOnline(false, name==='선생님'?'아래 학생 승인 관리에서 비밀번호를 넣으면 선생님도 대전할 수 있어요.':'선생님이 허락하면 열려요.');
+      if(ok) setOnline(true, name.startsWith('선생님')?'':'선생님이 허락했어요. 친구와 대전할 수 있어요!', true);
+      else setOnline(false, name.startsWith('선생님')?'아래 학생 승인 관리에서 비밀번호를 넣으면 선생님도 대전할 수 있어요.':'선생님이 허락하면 열려요.');
       return ok;
     }catch(e){ if(seq===checkSeq) setOnline(false,'확인하지 못했어요. 인터넷을 확인하고 번호를 다시 골라 보세요.'); return false; }
   }
   $('myName').addEventListener('change', checkApproval);
   checkApproval();
   $('codeIn').addEventListener('input', ()=>{ $('codeIn').value=$('codeIn').value.replace(/\D/g,'').slice(0,4); });
-  $('createRoom').onclick=async()=>{ if(!$('myName').value){ $('myName').focus(); return; }
+  $('createRoom').onclick=async()=>{ if(!$('myName').value){ $('pGrade').focus(); return; }
     if(!(await checkApproval())) return; startOnline(String(Math.floor(1000+Math.random()*9000)),'host'); };
-  $('joinRoom').onclick=async()=>{ if(!$('myName').value){ $('myName').focus(); return; }
+  $('joinRoom').onclick=async()=>{ if(!$('myName').value){ $('pGrade').focus(); return; }
     const code=$('codeIn').value; if(code.length!==4){ $('codeIn').focus(); return; }
     if(!(await checkApproval())) return; startOnline(code,null); };
 
@@ -710,22 +728,32 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     if(error||!data){ pin=''; $('pinMsg').hidden=false; $('pinMsg').textContent=error?'확인하지 못했어요. 잠시 뒤 다시 해 보세요.':'비밀번호가 맞지 않아요.'; return; }
     pin=v; try{ sessionStorage.setItem('omok.pin',v); }catch(e){}
     $('pinBox').hidden=true; $('approveBox').hidden=false;
-    const r=await sbc.from('omok_players').select('num,approved');
-    approved.clear(); (r.data||[]).forEach(x=>{ if(x.approved) approved.add(x.num); }); renderGrid();
+    await loadApprovals();
+  }
+  const teacherClass = () => classOf($('myName').value);
+  const keyOf = (tc,n) => `${tc.g}${tc.c}${String(n).padStart(2,'0')}`;
+  async function loadApprovals(){
+    const tc=teacherClass(); if(!tc) return;
+    const {data} = await sbc.from('omok_players').select('num,approved').like('num', `${tc.g}${tc.c}%`);
+    approved.clear(); (data||[]).forEach(r=>{ if(r.approved) approved.add(r.num); });
+    renderGrid();
   }
   function renderGrid(){
-    const g=$('numGrid'); g.textContent='';
-    for(const n of nums){ const label=n+'번', b=document.createElement('button');
-      b.textContent=label; b.setAttribute('aria-pressed', approved.has(label)); b.onclick=()=>setApproval([label], !approved.has(label)); g.appendChild(b); }
-    $('approveCount').textContent=`허락 ${approved.size}명 / ${nums.length}명`;
+    const tc=teacherClass(), g=$('numGrid'); g.textContent=''; if(!tc) return;
+    $('classTitle').textContent = `${tc.g}학년 ${tc.c}반`;
+    let cnt=0;
+    for(let n=1;n<=NUM_MAX;n++){ const k=keyOf(tc,n), on=approved.has(k), b=document.createElement('button'); if(on) cnt++;
+      b.textContent=n+'번'; b.title=k; b.setAttribute('aria-pressed', on); b.onclick=()=>setApproval([k], !approved.has(k)); g.appendChild(b); }
+    $('approveCount').textContent = `허락 ${cnt}명`;
   }
-  async function setApproval(labels,on){
-    const {error}=await sbc.rpc('omok_set_approval',{p_pin:pin,p_nums:labels,p_approved:on});
+  async function setApproval(keys,on){
+    const {error} = await sbc.rpc('omok_set_approval', {p_pin: pin, p_nums: keys, p_approved: on});
     if(error){ $('approveCount').textContent='저장하지 못했어요. 다시 눌러 주세요.'; return; }
-    labels.forEach(l=>on?approved.add(l):approved.delete(l)); renderGrid();
+    keys.forEach(k=> on ? approved.add(k) : approved.delete(k)); renderGrid();
   }
-  $('allOn').onclick=()=>setApproval(nums.map(n=>n+'번'),true);
-  $('allOff').onclick=()=>setApproval(nums.map(n=>n+'번'),false);
+  const allKeys = () => { const tc=teacherClass(); return tc ? [...Array(NUM_MAX)].map((_,i)=>keyOf(tc,i+1)) : []; };
+  $('allOn').onclick = ()=> setApproval(allKeys(), true);
+  $('allOff').onclick = ()=> setApproval(allKeys(), false);
 
   function maybeAI(){
     if(G.mode!=='ai' || S.phase!=='play' || S.turn===G.me) return;
