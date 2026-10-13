@@ -440,8 +440,8 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
       const sm=document.createElement('small'); sm.className='muted'; sm.textContent='죽은 돌이 맞는지 보고, 틀리면 돌을 눌러 고쳐요.'; st.append(sm);
     } else if(S.phase==='done'){
       const r=S.result; st.className='status win';
-      st.textContent = r.resign ? `${r.winner===1?nb_:nw} 승리! (상대 기권)` :
-        `${r.winner===1?nb_:nw} 승리! 흑 ${r.black}집, 백 ${r.white}집 (덤 포함)`;
+      st.textContent = r.resign ? `${r.winner===1?nb_:nw} 승리! (상대 기권)${winnerSuffix(r.winner)}` :
+        `${r.winner===1?nb_:nw}(${r.winner===1?'흑':'백'}) 승리!${winnerSuffix(r.winner)} 흑 ${r.black}집, 백 ${r.white}집 (덤 포함)`;
     } else if(G.mode==='online'){
       if(!G.partner) st.textContent = waitMsg();
       else if(G.role==='watch') st.textContent = `${S.turn===1?nb_:nw} 차례 (구경 중)`;
@@ -534,7 +534,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     if(S.phase==='score'){ if(S.b[p]){ const g=E.group(S.b,p,true); const isDead=S.dead.has(p);
         if(G.mode==='online' && G.role==='watch') return;
         for(const s of g.stones) isDead?S.dead.delete(s):S.dead.add(s);
-        if(G.mode==='online'){ G.R.dead=[...S.dead]; G.R.ver++; sendState(); }
+        if(G.mode==='online'){ G.R.dead=[...S.dead]; commit(); }
         refresh(); } return; }
     if(!canPlay()) return;
     if(!move(p)){ flash(S.b[p] ? '' : (p===S.ko ? '패: 바로 되따낼 수 없어요. 다른 곳에 한 수 두고 오세요.' : '그곳은 둘 수 없어요 (돌이 바로 잡혀요).')); }
@@ -554,14 +554,14 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
   }
   function move(p){
     if(!applyMove(p)) return false;
-    if(G.mode==='online'){ G.R.moves.push(p); G.R.ver++; sendState(); }
+    if(G.mode==='online'){ G.R.moves.push(p); commit(); }
     refresh(); maybeAI(); return true;
   }
   function pass(){
     applyPass();
     if(G.mode==='online') G.R.moves.push(-1);
     if(S.passes>=2) startScoring();
-    else { if(G.mode==='online'){ G.R.ver++; sendState(); } refresh(); maybeAI(); }
+    else { if(G.mode==='online'){ commit(); } refresh(); maybeAI(); }
   }
   function startScoring(){
     S.phase='score'; S.dead=new Set();
@@ -571,7 +571,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
       for(let p=0;p<E.NN;p++){ if(!S.b[p]||seen.has(p)) continue;
         const g=E.group(S.b,p,true); let sum=0; for(const s of g.stones){ seen.add(s); sum+=own[s]; }
         const avg=sum/g.size; if((S.b[p]===1 && avg<-0.5) || (S.b[p]===2 && avg>0.5)) for(const s of g.stones) S.dead.add(s); }
-      if(G.mode==='online'){ G.R.phase='score'; G.R.dead=[...S.dead]; G.R.ver++; sendState(); }
+      if(G.mode==='online'){ G.R.phase='score'; G.R.dead=[...S.dead]; commit(); }
       refresh();
       if(G.mode==='ai') setTimeout(()=>$('finish').focus(), 0);
     }, 30);
@@ -580,12 +580,12 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
   $('passBtn').onclick=()=>{ if(canPlay()) pass(); };
   $('resume').onclick=()=>{
     S.phase='play'; S.passes=0; S.dead=new Set();
-    if(G.mode==='online'){ G.R.moves.push(-2); G.R.phase='play'; G.R.dead=[]; G.R.ver++; sendState(); }
+    if(G.mode==='online'){ G.R.moves.push(-2); G.R.phase='play'; G.R.dead=[]; commit(); }
     refresh(); maybeAI(); };
   $('finish').onclick=()=>{
     const a=E.area(S.b,S.dead), white=a.white+KOMI, winner = a.black>white ? 1 : 2;
     S.result={black:a.black, white, winner}; S.phase='done'; record(winner);
-    if(G.mode==='online'){ G.R.phase='done'; G.R.result=S.result; G.R.ver++; sendState(); }
+    if(G.mode==='online'){ G.R.phase='done'; G.R.result=S.result; commit(); }
     refresh();
   };
   function roleOf(color){ return color===1 ? G.R.black : (G.R.black==='host'?'guest':'host'); }
@@ -607,8 +607,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
       if(G.role==='watch') return;
       if(S.phase!=='done' && G.R.moves.length) G.R.score[G.role==='host'?'guest':'host']++;   // 기권
       G.R.black = G.R.black==='host'?'guest':'host';
-      Object.assign(G.R, {moves:[], phase:'play', dead:[], result:null}); G.R.ver++;
-      sendState(); loadRemote(); return;
+      Object.assign(G.R, {moves:[], phase:'play', dead:[], result:null}); commit(); loadRemote(); return;
     }
     if(S.phase==='play' || S.phase==='score'){
       if(S.moveNo>0){ const winner = G.mode==='ai' ? 3-G.me : 3-S.turn; record(winner); }
@@ -678,14 +677,16 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     ch.on('presence',{event:'sync'},onPresence);
     ch.on('broadcast',{event:'hello'},()=>{ if(G.R.ver>0 || G.role==='host') sendState(); });
     ch.on('broadcast',{event:'state'},({payload:P})=>{
-      if(!P || typeof P.ver!=='number' || P.ver < G.R.ver) return;
+      if(!P || typeof P.ver!=='number') return;
+      const pby=String(P.by||'');
+      if(P.ver < G.R.ver || (P.ver===G.R.ver && pby <= String(G.R.by||''))) return;
       const n=[9,13,19].includes(P.n)?P.n:null; if(!n || !Array.isArray(P.moves) || P.moves.length>n*n*4) return;
       const okInt=v=>Number.isInteger(v)&&v>=-2&&v<n*n;
       if(!P.moves.every(okInt)) return;
       const dead=Array.isArray(P.dead)?P.dead.filter(v=>Number.isInteger(v)&&v>=0&&v<n*n):[];
       const r=P.result && typeof P.result==='object' ? {black:+P.result.black||0, white:+P.result.white||0, winner:P.result.winner===1?1:2} : null;
       G.R={n, moves:P.moves, black:P.black==='guest'?'guest':'host', score:{host:+P.score?.host||0, guest:+P.score?.guest||0},
-           ver:P.ver, phase:['play','score','done'].includes(P.phase)?P.phase:'play', dead, result:r};
+           ver:P.ver, by:pby, phase:['play','score','done'].includes(P.phase)?P.phase:'play', dead, result:r};
       loadRemote();
     });
     ch.subscribe(status=>{
@@ -728,7 +729,9 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     }
     G.peerNames = {};
     if(G.role==='host' || G.role==='guest') G.peerNames[G.role] = myName();
-    for(const p of list){ if(p.role==='host'||p.role==='guest') G.peerNames[p.role] = String(p.name||'').slice(0,10); }
+    for(const p of [...list].sort((a,b)=>(a.t||0)-(b.t||0))){
+      if((p.role==='host'||p.role==='guest') && p.role!==G.role && !G.peerNames[p.role]) G.peerNames[p.role] = String(p.name||'').slice(0,10);
+    }
     G.noHost = G.role!=='host' && !list.some(p=>p.role==='host');
     G.partner = G.role==='watch' ? (!!G.peerNames.host && !!G.peerNames.guest)
               : list.some(p=>p.role===(G.role==='host'?'guest':'host'));
@@ -740,7 +743,15 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     if(G.noHost) return `${G.code}번 방을 만든 친구가 아직 없어요. 번호를 다시 확인해 주세요`;
     return '친구가 들어오기를 기다려요';
   }
+  function commit(){ G.R.ver++; G.R.by=G.me; sendState(); }
   function sendState(){ if(ch) ch.send({type:'broadcast',event:'state',payload:G.R}); }
+  // 대전에서 이긴 쪽이 나인지 친구인지
+  function winnerSuffix(color){
+    if(G.mode!=='online' || G.role==='watch' || !G.role) return '';
+    const r = color===1 ? G.R.black : (G.R.black==='host'?'guest':'host');
+    return r===G.role ? ' (내가 이겼어요)' : ' (친구가 이겼어요)';
+  }
+
   function leaveOnline(){ if(ch){ try{ sbc.removeChannel(ch); }catch(e){} ch=null; } }
 
   // ---- 선생님 승인 화면 (오목과 같은 명단·비밀번호) ----

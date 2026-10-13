@@ -327,7 +327,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     $('cardW').classList.toggle('turn', !S.over && t===WHITE);
     const st = $('status'); st.className = 'status';
     if(S.over==='draw') st.textContent = '판이 가득 찼어요. 무승부!';
-    else if(S.over){ st.textContent = `🎉 ${S.over===BLACK?nb:nw} 승리!`; st.className='status win'; }
+    else if(S.over){ st.textContent = `🎉 ${S.over===BLACK?nb:nw}(${S.over===BLACK?'흑':'백'}) 승리!${winnerSuffix(S.over)}`; st.className='status win'; }
     else if(G.mode==='online' && !G.partner) st.textContent = waitMsg();
     else if(G.mode==='online' && G.role!=='watch') st.textContent = t===myColor() ? '내 차례예요' : '친구 차례예요';
     else if(G.mode==='ai') st.textContent = t===G.me ? '내 차례예요' : '컴퓨터가 생각 중…';
@@ -335,7 +335,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
 
     $('undo').hidden = G.mode==='online';
     $('undo').disabled = !S.moves.length || !!S.over || (G.mode==='ai' && turnOf(S)!==G.me);
-    $('next').disabled = G.mode==='online' && G.role==='watch';
+    $('next').disabled = G.mode==='online' && (G.role!=='host' && G.role!=='guest' || !S.over);
     if(G.mode==='online'){
       $('roomBar').hidden = false; $('roomCode').textContent = G.code;
       $('roomInfo').textContent = G.role==='watch' ? '(구경)' : (G.partner ? '친구 연결됨' : '번호를 친구에게 알려 주세요');
@@ -408,7 +408,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     const c = turnOf(S);
     S = rebuild([...S.moves, {x,y,c}]);
     if(S.over && S.over!=='draw') onWin(S.over);
-    if(G.mode==='online'){ G.R.moves = S.moves; G.R.ver++; sendState(); }
+    if(G.mode==='online'){ G.R.moves = S.moves; commit(); }
     refresh();
     if(G.mode==='ai') maybeAI();
   }
@@ -428,7 +428,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
   $('next').onclick = ()=>{
     if(G.mode==='ai'){ clearTimeout(aiTimer); G.me = other(G.me); }
     if(G.mode==='local') G.aIsBlack = !G.aIsBlack;
-    if(G.mode==='online'){ G.R.black = G.R.black==='host'?'guest':'host'; G.R.moves=[]; G.R.ver++; sendState(); }
+    if(G.mode==='online'){ G.R.black = G.R.black==='host'?'guest':'host'; G.R.moves=[]; commit(); }
     S = blankState(); refresh();
     if(G.mode==='ai') maybeAI();
   };
@@ -587,11 +587,13 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     ch.on('presence', {event:'sync'}, onPresence);
     ch.on('broadcast', {event:'hello'}, ()=>{ if(G.R.ver>0 || G.role==='host') sendState(); });
     ch.on('broadcast', {event:'state'}, ({payload})=>{
-      if(!payload || typeof payload.ver!=='number' || payload.ver < G.R.ver) return;
+      if(!payload || typeof payload.ver!=='number') return;
+      const pby = String(payload.by||'');
+      if(payload.ver < G.R.ver || (payload.ver===G.R.ver && pby <= String(G.R.by||''))) return;
       if(!Array.isArray(payload.moves) || payload.moves.length > N*N) return;
       const moves = payload.moves.filter(m=>m && Number.isInteger(m.x)&&Number.isInteger(m.y)&&m.x>=0&&m.y>=0&&m.x<N&&m.y<N&&(m.c===1||m.c===2));
       G.R = {moves, black: payload.black==='guest'?'guest':'host',
-             score:{host:+payload.score?.host||0, guest:+payload.score?.guest||0}, ver:payload.ver};
+             score:{host:+payload.score?.host||0, guest:+payload.score?.guest||0}, ver:payload.ver, by:pby};
       S = rebuild(moves); refresh();
     });
     ch.subscribe(status=>{
@@ -634,7 +636,9 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     }
     G.peerNames = {};
     if(G.role==='host' || G.role==='guest') G.peerNames[G.role] = myName();
-    for(const p of list){ if(p.role==='host'||p.role==='guest') G.peerNames[p.role] = String(p.name||'').slice(0,10); }
+    for(const p of [...list].sort((a,b)=>(a.t||0)-(b.t||0))){
+      if((p.role==='host'||p.role==='guest') && p.role!==G.role && !G.peerNames[p.role]) G.peerNames[p.role] = String(p.name||'').slice(0,10);
+    }
     G.noHost = G.role!=='host' && !list.some(p=>p.role==='host');
     G.partner = G.role==='watch' ? (!!G.peerNames.host && !!G.peerNames.guest)
               : list.some(p=>p.role===(G.role==='host'?'guest':'host'));
@@ -646,10 +650,19 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     if(G.noHost) return `${G.code}번 방을 만든 친구가 아직 없어요. 번호를 다시 확인해 주세요`;
     return '친구가 들어오기를 기다려요';
   }
+  // 내가 판을 바꿀 때: 버전 +1, 바꾼 사람 표시 후 보내기
+  function commit(){ G.R.ver++; G.R.by = G.me; sendState(); }
   function sendState(){
     if(!ch) return;
-    ch.send({type:'broadcast', event:'state', payload:{moves:G.R.moves, black:G.R.black, score:G.R.score, ver:G.R.ver}});
+    ch.send({type:'broadcast', event:'state', payload:{moves:G.R.moves, black:G.R.black, score:G.R.score, ver:G.R.ver, by:G.R.by||''}});
   }
+  // 대전에서 이긴 쪽이 나인지 친구인지
+  function winnerSuffix(color){
+    if(G.mode!=='online' || G.role==='watch' || !G.role) return '';
+    const r = color===1 ? G.R.black : (G.R.black==='host'?'guest':'host');
+    return r===G.role ? ' (내가 이겼어요)' : ' (친구가 이겼어요)';
+  }
+
   function leaveOnline(){ if(ch){ try{ sb.removeChannel(ch); }catch(e){} ch=null; } }
 })();
 </script>
