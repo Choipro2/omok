@@ -328,7 +328,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     const st = $('status'); st.className = 'status';
     if(S.over==='draw') st.textContent = '판이 가득 찼어요. 무승부!';
     else if(S.over){ st.textContent = `🎉 ${S.over===BLACK?nb:nw} 승리!`; st.className='status win'; }
-    else if(G.mode==='online' && !G.partner) st.textContent = G.role==='watch' ? '구경하는 중이에요' : '친구가 들어오기를 기다려요';
+    else if(G.mode==='online' && !G.partner) st.textContent = waitMsg();
     else if(G.mode==='online' && G.role!=='watch') st.textContent = t===myColor() ? '내 차례예요' : '친구 차례예요';
     else if(G.mode==='ai') st.textContent = t===G.me ? '내 차례예요' : '컴퓨터가 생각 중…';
     else st.textContent = `${t===BLACK?nb:nw} 차례 (${t===BLACK?'흑':'백'})`;
@@ -576,7 +576,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
   $('allOff').onclick = ()=> setApproval(allKeys(), false);
 
   function startOnline(code, role){
-    G = {mode:'online', code, role, me:'p'+Math.random().toString(36).slice(2,10), partner:false,
+    G = {mode:'online', code, role:null, wantHost: role==='host', decided:false, subscribed:false, noHost:false, me:'p'+Math.random().toString(36).slice(2,10), partner:false,
          peerNames:{}, R:{moves:[], black:'host', score:{host:0,guest:0}, ver:0}};
     S = blankState(); enterGame();
     $('modeTitle').textContent = '친구와 대전';
@@ -596,34 +596,55 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     });
     ch.subscribe(status=>{
       if(status==='SUBSCRIBED'){
-        if(G.role){ ch.track({role:G.role, name:myName()}); ch.send({type:'broadcast', event:'hello', payload:{}}); }
-        else setTimeout(pickRole, 1200);   // 방에 누가 있는지 보고 자리 정하기
+        G.subscribed = true;
+        if(ch.presenceState && Object.keys(ch.presenceState()).length) decideRole();
+        setTimeout(decideRole, 3000);   // 방 정보가 늦게 와도 3초 뒤에는 자리 정하기
       } else if(status==='CHANNEL_ERROR' || status==='TIMED_OUT'){
         $('status').textContent = '연결이 안 돼요. 인터넷을 확인하고 다시 들어가 보세요.';
       }
     });
   }
-  function others(){
-    const st = ch ? ch.presenceState() : {};
-    return Object.entries(st).filter(([k])=>k!==G.me).map(([,v])=>v[0]||{});
-  }
-  function pickRole(){
-    if(G.mode!=='online' || G.role) return;
-    const roles = others().map(p=>p.role);
-    G.role = !roles.includes('host') ? 'host' : !roles.includes('guest') ? 'guest' : 'watch';
-    if(G.role!=='watch') ch.track({role:G.role, name:myName()});
+  // 자리 정하기: 방 만든 사람은 항상 방장, 들어온 사람은 절대 방장이 되지 않음
+  function decideRole(){
+    if(G.mode!=='online' || G.decided || !ch) return;
+    G.decided = true;
+    const list = others(), roles = list.map(p=>p.role);
+    if(G.wantHost){
+      if(roles.includes('host')){ const old=ch; ch=null; try{ sb.removeChannel(old); }catch(e){} startOnline(String(Math.floor(1000+Math.random()*9000)), 'host'); return; }  // 같은 번호의 방이 이미 있으면 새 번호로
+      G.role = 'host';
+    } else {
+      G.role = !roles.includes('guest') ? 'guest' : 'watch';
+    }
+    G.t = Date.now();
+    if(G.role!=='watch') ch.track({role:G.role, name:myName(), t:G.t});
     ch.send({type:'broadcast', event:'hello', payload:{}});
     onPresence();
   }
+  function others(){
+    const st = ch ? ch.presenceState() : {};
+    return Object.entries(st).filter(([k])=>k!==G.me).map(([k,v])=>Object.assign({key:k}, v[0]||{}));
+  }
   function onPresence(){
     if(G.mode!=='online') return;
+    if(!G.decided){ if(G.subscribed) decideRole(); return; }
     const list = others();
+    // 같은 자리(방장/친구)가 둘이면 늦게 온 쪽이 구경으로
+    if(G.role==='guest' && list.some(p=>p.role==='guest' && ((p.t||0) < G.t || ((p.t||0)===G.t && p.key < G.me)))){
+      G.role='watch'; try{ ch.untrack(); }catch(e){}
+    }
     G.peerNames = {};
     if(G.role==='host' || G.role==='guest') G.peerNames[G.role] = myName();
     for(const p of list){ if(p.role==='host'||p.role==='guest') G.peerNames[p.role] = String(p.name||'').slice(0,10); }
+    G.noHost = G.role!=='host' && !list.some(p=>p.role==='host');
     G.partner = G.role==='watch' ? (!!G.peerNames.host && !!G.peerNames.guest)
               : list.some(p=>p.role===(G.role==='host'?'guest':'host'));
     refresh();
+  }
+  function waitMsg(){
+    if(!G.decided) return '방에 들어가는 중…';
+    if(G.role==='watch') return '이 방에는 이미 두 명이 있어요. 구경하는 중이에요';
+    if(G.noHost) return `${G.code}번 방을 만든 친구가 아직 없어요. 번호를 다시 확인해 주세요`;
+    return '친구가 들어오기를 기다려요';
   }
   function sendState(){
     if(!ch) return;

@@ -443,7 +443,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
       st.textContent = r.resign ? `${r.winner===1?nb_:nw} 승리! (상대 기권)` :
         `${r.winner===1?nb_:nw} 승리! 흑 ${r.black}집, 백 ${r.white}집 (덤 포함)`;
     } else if(G.mode==='online'){
-      if(!G.partner) st.textContent = G.role==='watch' ? '구경하는 중이에요' : '친구가 들어오기를 기다려요';
+      if(!G.partner) st.textContent = waitMsg();
       else if(G.role==='watch') st.textContent = `${S.turn===1?nb_:nw} 차례 (구경 중)`;
       else st.textContent = (S.turn===myColor() ? '내 차례예요' : '친구 차례예요') + (S.passes?' · 상대가 통과했어요':'');
     } else if(G.mode==='ai'){
@@ -670,7 +670,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
   }
   function startOnline(code, role){
     E=makeEngine(size);
-    G={mode:'online', code, role, me:'p'+Math.random().toString(36).slice(2,10), partner:false, peerNames:{},
+    G={mode:'online', code, role:null, wantHost: role==='host', decided:false, subscribed:false, noHost:false, me:'p'+Math.random().toString(36).slice(2,10), partner:false, peerNames:{},
        R:{n:size, moves:[], black:'host', score:{host:0,guest:0}, ver:0, phase:'play', dead:[], result:null}};
     if(role==='host') G.peerNames.host=myName();
     S=fresh(); enterGame(); loadRemote();
@@ -690,27 +690,55 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     });
     ch.subscribe(status=>{
       if(status==='SUBSCRIBED'){
-        if(G.role){ ch.track({role:G.role,name:myName()}); ch.send({type:'broadcast',event:'hello',payload:{}}); }
-        else setTimeout(pickRole,1200);
-      } else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'){ $('status').textContent='연결이 안 돼요. 인터넷을 확인하고 다시 들어가 보세요.'; }
+        G.subscribed = true;
+        if(ch.presenceState && Object.keys(ch.presenceState()).length) decideRole();
+        setTimeout(decideRole, 3000);   // 방 정보가 늦게 와도 3초 뒤에는 자리 정하기
+      } else if(status==='CHANNEL_ERROR' || status==='TIMED_OUT'){
+        $('status').textContent = '연결이 안 돼요. 인터넷을 확인하고 다시 들어가 보세요.';
+      }
     });
   }
-  function others(){ const st=ch?ch.presenceState():{}; return Object.entries(st).filter(([k])=>k!==G.me).map(([,v])=>v[0]||{}); }
-  function pickRole(){
-    if(G.mode!=='online'||G.role) return;
-    const roles=others().map(p=>p.role);
-    G.role=!roles.includes('host')?'host':!roles.includes('guest')?'guest':'watch';
-    if(G.role!=='watch') ch.track({role:G.role,name:myName()});
-    ch.send({type:'broadcast',event:'hello',payload:{}});
+  // 자리 정하기: 방 만든 사람은 항상 방장, 들어온 사람은 절대 방장이 되지 않음
+  function decideRole(){
+    if(G.mode!=='online' || G.decided || !ch) return;
+    G.decided = true;
+    const list = others(), roles = list.map(p=>p.role);
+    if(G.wantHost){
+      if(roles.includes('host')){ const old=ch; ch=null; try{ sbc.removeChannel(old); }catch(e){} startOnline(String(Math.floor(1000+Math.random()*9000)), 'host'); return; }  // 같은 번호의 방이 이미 있으면 새 번호로
+      G.role = 'host';
+    } else {
+      G.role = !roles.includes('guest') ? 'guest' : 'watch';
+    }
+    G.t = Date.now();
+    if(G.role!=='watch') ch.track({role:G.role, name:myName(), t:G.t});
+    ch.send({type:'broadcast', event:'hello', payload:{}});
     onPresence();
+  }
+  function others(){
+    const st = ch ? ch.presenceState() : {};
+    return Object.entries(st).filter(([k])=>k!==G.me).map(([k,v])=>Object.assign({key:k}, v[0]||{}));
   }
   function onPresence(){
     if(G.mode!=='online') return;
-    const list=others(); G.peerNames={};
-    if(G.role==='host'||G.role==='guest') G.peerNames[G.role]=myName();
-    for(const p of list){ if(p.role==='host'||p.role==='guest') G.peerNames[p.role]=String(p.name||'').slice(0,10); }
-    G.partner = G.role==='watch' ? (!!G.peerNames.host && !!G.peerNames.guest) : list.some(p=>p.role===(G.role==='host'?'guest':'host'));
+    if(!G.decided){ if(G.subscribed) decideRole(); return; }
+    const list = others();
+    // 같은 자리(방장/친구)가 둘이면 늦게 온 쪽이 구경으로
+    if(G.role==='guest' && list.some(p=>p.role==='guest' && ((p.t||0) < G.t || ((p.t||0)===G.t && p.key < G.me)))){
+      G.role='watch'; try{ ch.untrack(); }catch(e){}
+    }
+    G.peerNames = {};
+    if(G.role==='host' || G.role==='guest') G.peerNames[G.role] = myName();
+    for(const p of list){ if(p.role==='host'||p.role==='guest') G.peerNames[p.role] = String(p.name||'').slice(0,10); }
+    G.noHost = G.role!=='host' && !list.some(p=>p.role==='host');
+    G.partner = G.role==='watch' ? (!!G.peerNames.host && !!G.peerNames.guest)
+              : list.some(p=>p.role===(G.role==='host'?'guest':'host'));
     refresh();
+  }
+  function waitMsg(){
+    if(!G.decided) return '방에 들어가는 중…';
+    if(G.role==='watch') return '이 방에는 이미 두 명이 있어요. 구경하는 중이에요';
+    if(G.noHost) return `${G.code}번 방을 만든 친구가 아직 없어요. 번호를 다시 확인해 주세요`;
+    return '친구가 들어오기를 기다려요';
   }
   function sendState(){ if(ch) ch.send({type:'broadcast',event:'state',payload:G.R}); }
   function leaveOnline(){ if(ch){ try{ sbc.removeChannel(ch); }catch(e){} ch=null; } }
