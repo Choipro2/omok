@@ -668,83 +668,111 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     refresh();
   }
   function startOnline(code, role){
-    E=makeEngine(size);
-    G={mode:'online', code, role:null, wantHost: role==='host', decided:false, subscribed:false, noHost:false, me:'p'+Math.random().toString(36).slice(2,10), partner:false, peerNames:{},
-       R:{n:size, moves:[], black:'host', score:{host:0,guest:0}, ver:0, phase:'play', dead:[], result:null}};
-    if(role==='host') G.peerNames.host=myName();
-    S=fresh(); enterGame(); loadRemote();
-    ch=sbc.channel('baduk-room-'+code,{config:{broadcast:{self:false}, presence:{key:G.me}}});
-    ch.on('presence',{event:'sync'},onPresence);
-    ch.on('broadcast',{event:'hello'},()=>{ if(G.R.ver>0 || G.role==='host') sendState(); });
-    ch.on('broadcast',{event:'state'},({payload:P})=>{
-      if(!P || typeof P.ver!=='number') return;
-      const pby=String(P.by||'');
-      if(P.ver < G.R.ver || (P.ver===G.R.ver && pby <= String(G.R.by||''))) return;
-      const n=[9,13,19].includes(P.n)?P.n:null; if(!n || !Array.isArray(P.moves) || P.moves.length>n*n*4) return;
-      const okInt=v=>Number.isInteger(v)&&v>=-2&&v<n*n;
-      if(!P.moves.every(okInt)) return;
-      const dead=Array.isArray(P.dead)?P.dead.filter(v=>Number.isInteger(v)&&v>=0&&v<n*n):[];
-      const r=P.result && typeof P.result==='object' ? {black:+P.result.black||0, white:+P.result.white||0, winner:P.result.winner===1?1:2} : null;
-      G.R={n, moves:P.moves, black:P.black==='guest'?'guest':'host', score:{host:+P.score?.host||0, guest:+P.score?.guest||0},
-           ver:P.ver, by:pby, phase:['play','score','done'].includes(P.phase)?P.phase:'play', dead, result:r};
-      loadRemote();
-    });
-    ch.subscribe(status=>{
+    leaveOnline();
+    const wantHost = role==='host';
+    G = {mode:'online', code, wantHost, role: wantHost ? 'host' : null, me:'p'+Math.random().toString(36).slice(2,10),
+         partner:false, peerNames:{}, noHost:false, guest:null, hostSeen:0, joinTries:0, tick:0,
+         R: {n:size, moves:[], black:'host', score:{host:0,guest:0}, ver:0, phase:'play', dead:[], result:null}};
+    if(wantHost) G.peerNames.host = myName();
+    E=makeEngine(size); S=fresh(); enterGame(); loadRemote();
+    const thisCh = sbc.channel('baduk-room-'+code, {config:{broadcast:{self:false}}});
+    ch = thisCh;
+    thisCh.on('broadcast', {event:'join'}, ({payload})=>onJoin(payload));
+    thisCh.on('broadcast', {event:'welcome'}, ({payload})=>onWelcome(payload));
+    thisCh.on('broadcast', {event:'full'}, ({payload})=>onFull(payload));
+    thisCh.on('broadcast', {event:'ping'}, ({payload})=>onPing(payload));
+    thisCh.on('broadcast', {event:'hostcheck'}, ({payload})=>{ if(G.role==='host' && payload && payload.id!==G.me) send('hostexists', {to:payload.id}); });
+    thisCh.on('broadcast', {event:'hostexists'}, ({payload})=>{
+      if(payload && payload.to===G.me && G.wantHost && !G.guest && !G.R.ver) startOnline(String(Math.floor(1000+Math.random()*9000)), 'host'); });
+    thisCh.on('broadcast', {event:'state'}, ({payload})=>{ if(applyState(payload, false)) markSeen(payload && payload.from); });
+    thisCh.subscribe(status=>{
+      if(ch!==thisCh) return;
       if(status==='SUBSCRIBED'){
-        G.subscribed = true;
-        if(ch.presenceState && Object.keys(ch.presenceState()).length) decideRole();
-        setTimeout(decideRole, 3000);   // 방 정보가 늦게 와도 3초 뒤에는 자리 정하기
+        if(G.wantHost) send('hostcheck', {id:G.me}); else tryJoin();
+        clearInterval(netTimer); netTimer = setInterval(tick, 2500);
       } else if(status==='CHANNEL_ERROR' || status==='TIMED_OUT'){
         $('status').textContent = '연결이 안 돼요. 인터넷을 확인하고 다시 들어가 보세요.';
       }
     });
-  }
-  // 자리 정하기: 방 만든 사람은 항상 방장, 들어온 사람은 절대 방장이 되지 않음
-  function decideRole(){
-    if(G.mode!=='online' || G.decided || !ch) return;
-    G.decided = true;
-    const list = others(), roles = list.map(p=>p.role);
-    if(G.wantHost){
-      if(roles.includes('host')){ const old=ch; ch=null; try{ sbc.removeChannel(old); }catch(e){} startOnline(String(Math.floor(1000+Math.random()*9000)), 'host'); return; }  // 같은 번호의 방이 이미 있으면 새 번호로
-      G.role = 'host';
-    } else {
-      G.role = !roles.includes('guest') ? 'guest' : 'watch';
-    }
-    G.t = Date.now();
-    if(G.role!=='watch') ch.track({role:G.role, name:myName(), t:G.t});
-    ch.send({type:'broadcast', event:'hello', payload:{}});
-    onPresence();
-  }
-  function others(){
-    const st = ch ? ch.presenceState() : {};
-    return Object.entries(st).filter(([k])=>k!==G.me).map(([k,v])=>Object.assign({key:k}, v[0]||{}));
-  }
-  function onPresence(){
-    if(G.mode!=='online') return;
-    if(!G.decided){ if(G.subscribed) decideRole(); return; }
-    const list = others();
-    // 같은 자리(방장/친구)가 둘이면 늦게 온 쪽이 구경으로
-    if(G.role==='guest' && list.some(p=>p.role==='guest' && ((p.t||0) < G.t || ((p.t||0)===G.t && p.key < G.me)))){
-      G.role='watch'; try{ ch.untrack(); }catch(e){}
-    }
-    G.peerNames = {};
-    if(G.role==='host' || G.role==='guest') G.peerNames[G.role] = myName();
-    for(const p of [...list].sort((a,b)=>(a.t||0)-(b.t||0))){
-      if((p.role==='host'||p.role==='guest') && p.role!==G.role && !G.peerNames[p.role]) G.peerNames[p.role] = String(p.name||'').slice(0,10);
-    }
-    G.noHost = G.role!=='host' && !list.some(p=>p.role==='host');
-    G.partner = G.role==='watch' ? (!!G.peerNames.host && !!G.peerNames.guest)
-              : list.some(p=>p.role===(G.role==='host'?'guest':'host'));
     refresh();
   }
-  function waitMsg(){
-    if(!G.decided) return '방에 들어가는 중…';
-    if(G.role==='watch') return '이 방에는 이미 두 명이 있어요. 구경하는 중이에요';
-    if(G.noHost) return `${G.code}번 방을 만든 친구가 아직 없어요. 번호를 다시 확인해 주세요`;
-    return '친구가 들어오기를 기다려요';
+  let netTimer = null;
+  function send(event, payload){ if(ch) ch.send({type:'broadcast', event, payload}); }
+  function tryJoin(){
+    if(G.mode!=='online' || G.role) return;
+    G.joinTries++; send('join', {id:G.me, name:myName()});
+    if(G.joinTries>=2 && !G.noHost){ G.noHost = true; refresh(); }
   }
+  function tick(){
+    if(G.mode!=='online'){ clearInterval(netTimer); return; }
+    if(!G.role){ tryJoin(); return; }
+    G.tick++;
+    if(G.role!=='watch' && G.tick%3===0) send('ping', {id:G.me, role:G.role, name:myName()});
+    const was = G.partner, now = Date.now();
+    if(G.role==='host') G.partner = !!(G.guest && now-G.guest.seen < 25000);
+    else if(G.role==='guest') G.partner = now-G.hostSeen < 25000;
+    if(was!==G.partner) refresh();
+  }
+  function markSeen(from){
+    if(!from) return; const now = Date.now();
+    if(G.role==='host' && G.guest && from===G.guest.id) G.guest.seen = now;
+    if(G.role==='guest' && from===G.hostId) G.hostSeen = now;
+  }
+  // 방장: 들어오려는 친구 받기 (같은 이름이 다시 들어오거나, 친구가 25초 넘게 안 보이면 자리 넘겨주기)
+  function onJoin(P){
+    if(G.role!=='host' || !P || typeof P.id!=='string') return;
+    const name = String(P.name||'').slice(0,10), now = Date.now(), g = G.guest;
+    if(!g || g.id===P.id || g.name===name || now-g.seen > 25000){
+      G.guest = {id:P.id, name, seen:now}; G.peerNames.guest = name; G.partner = true;
+      send('welcome', {to:P.id, hostId:G.me, hostName:myName(), state:statePayload()});
+      refresh();
+    } else {
+      send('full', {to:P.id, hostName:myName(), guestName:g.name, state:statePayload()});
+    }
+  }
+  function onWelcome(P){
+    if(!P || P.to!==G.me || G.wantHost) return;
+    G.role = 'guest'; G.hostId = P.hostId; G.hostSeen = Date.now(); G.partner = true; G.noHost = false;
+    G.peerNames = {host:String(P.hostName||'').slice(0,10), guest:myName()};
+    if(P.state) applyState(P.state, true);
+    send('ping', {id:G.me, role:'guest', name:myName()});
+    refresh();
+  }
+  function onFull(P){
+    if(!P || P.to!==G.me || G.role) return;
+    G.role = 'watch'; G.partner = true; G.noHost = false;
+    G.peerNames = {host:String(P.hostName||'').slice(0,10), guest:String(P.guestName||'').slice(0,10)};
+    if(P.state) applyState(P.state, true);
+    refresh();
+  }
+  function onPing(P){
+    if(!P) return; const now = Date.now();
+    if(G.role==='host' && P.role==='guest' && G.guest && P.id===G.guest.id){ G.guest.seen = now; if(!G.partner){ G.partner = true; refresh(); } }
+    else if(G.role==='guest' && P.role==='host' && P.id===G.hostId){ G.hostSeen = now; if(!G.partner){ G.partner = true; refresh(); } }
+  }
+  function waitMsg(){
+    if(G.role==='host') return G.guest ? '친구 연결이 끊겼어요. 다시 들어오기를 기다려요' : '친구가 들어오기를 기다려요';
+    if(G.role==='guest') return '방장 연결이 끊겼어요. 기다리는 중…';
+    if(G.noHost) return `${G.code}번 방을 만든 친구가 아직 없어요. 번호를 다시 확인해 주세요`;
+    return '방에 들어가는 중…';
+  }
+  function applyState(P, force){
+    if(!P || typeof P.ver!=='number') return false;
+    const pby=String(P.by||'');
+    if(!force && (P.ver < G.R.ver || (P.ver===G.R.ver && pby <= String(G.R.by||'')))) return false;
+    const n=[9,13,19].includes(P.n)?P.n:null; if(!n || !Array.isArray(P.moves) || P.moves.length>n*n*4) return false;
+    const okInt=v=>Number.isInteger(v)&&v>=-2&&v<n*n;
+    if(!P.moves.every(okInt)) return false;
+    const dead=Array.isArray(P.dead)?P.dead.filter(v=>Number.isInteger(v)&&v>=0&&v<n*n):[];
+    const r=P.result && typeof P.result==='object' ? {black:+P.result.black||0, white:+P.result.white||0, winner:P.result.winner===1?1:2} : null;
+    G.R={n, moves:P.moves, black:P.black==='guest'?'guest':'host', score:{host:+P.score?.host||0, guest:+P.score?.guest||0},
+         ver:P.ver, by:pby, phase:['play','score','done'].includes(P.phase)?P.phase:'play', dead, result:r};
+    loadRemote();
+    return true;
+  }
+  function statePayload(){ return Object.assign({}, G.R, {from:G.me}); }
   function commit(){ G.R.ver++; G.R.by=G.me; sendState(); }
-  function sendState(){ if(ch) ch.send({type:'broadcast',event:'state',payload:G.R}); }
+  function sendState(){ send('state', statePayload()); }
   // 대전에서 이긴 쪽이 나인지 친구인지
   function winnerSuffix(color){
     if(G.mode!=='online' || G.role==='watch' || !G.role) return '';
@@ -752,7 +780,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     return r===G.role ? ' (내가 이겼어요)' : ' (친구가 이겼어요)';
   }
 
-  function leaveOnline(){ if(ch){ try{ sbc.removeChannel(ch); }catch(e){} ch=null; } }
+  function leaveOnline(){ clearInterval(netTimer); if(ch){ const old=ch; ch=null; try{ sbc.removeChannel(old); }catch(e){} } }
 
   // ---- 선생님 승인 화면 (오목과 같은 명단·비밀번호) ----
   let pin=''; try{ pin=sessionStorage.getItem('omok.pin')||''; }catch(e){}
