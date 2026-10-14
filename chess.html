@@ -874,7 +874,16 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
     if(P.type==='mate'){ const s=Chess.status(after); ok = s.reason==='checkmate';
       if(!ok) bad = s.reason==='stalemate' ? '앗, 스테일메이트! 체크가 아닌데 움직일 곳이 없어서 무승부예요.' : (Chess.inCheck(after.b,'b') ? '체크는 맞지만 검은 킹이 피할 수 있어요.' : '체크메이트가 아니에요.'); }
     else if(P.type==='escape'){ ok=true; }
-    else if(P.type==='best'){ ok = P.answer.includes(u); if(!ok) bad = m.cap ? '잡을 수는 있지만 더 좋은 수가 있어요.' : '다시 생각해 보세요.'; }
+    else if(P.type==='best'){ ok = P.answer.includes(u);
+      if(!ok){
+        const lost = Chess.legal(after).some(r=>r.to===m.to);
+        const chk = Chess.inCheck(after.b,'b');
+        if(lost) bad = `${KNAME[LS.st.b[m.from].toUpperCase()]}이(가) ${Chess.sqName(m.to)}에 가면 상대가 바로 잡을 수 있어요!`;
+        else if(m.cap) bad = '잡을 수는 있지만 더 좋은 수가 있어요.';
+        else if(/체크/.test(P.ask) && !chk) bad = '체크가 아니에요. 상대 킹을 공격하는 칸을 찾아보세요.';
+        else if(/체크/.test(P.ask)) bad = '체크는 맞지만 다른 말은 공격하지 못해요.';
+        else bad = '다시 생각해 보세요.';
+      } }
     else if(P.type==='move'){ ok = P.need==='castle' ? !!m.castle : P.need==='ep' ? !!m.ep : (m.promo==='q' && m.to>>3===0);
       if(!ok) bad = P.need==='castle' ? '킹을 룩 쪽으로 두 칸 옮겨 보세요.' : P.need==='ep' ? '옆에 온 폰 뒤쪽(대각선)으로 가 보세요.' : '폰을 끝 줄까지 보내서 퀸을 고르세요.'; }
     if(ok){ LS.st=after; LS.last=[m.from,m.to]; drawLesson(); problemDone(LS.wrong, P.why); }
