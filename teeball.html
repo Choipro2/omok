@@ -551,6 +551,7 @@ function home(){
      <select id="pGrade" aria-label="학년">${opt([['','학년']].concat([1,2,3,4,5,6].map(v=>[String(v),v+'학년'])),g)}</select>
      <select id="pClass" aria-label="반">${opt([['','반']].concat([1,2,3,4,5,6,7,8,9].map(v=>[String(v),v+'반'])),c)}</select>
      <select id="pNum" aria-label="번호">${opt([['','번호']].concat([...Array(60)].map((_,i)=>[String(i+1),(i+1)+'번'])).concat([['T','선생님']]),n)}</select></p>
+   <div class="row" style="margin:6px 0 10px"><a href="teeball-play.html"><button class="big">👫 친구들과 경기하기 ▶</button></a><span class="note" style="align-self:center">2~6명 · 각자 윈도우북에서 같은 방 번호로</span></div>
    ${isTeacher()&&sbc?`<div class="teacherbar"><span>선생님 메뉴</span><button id="openProgress">반 진도 보기</button></div>`:''}
    <div class="bar"><i style="width:${pct}%"></i></div>
    <p class="note">${passed>=L.length?'🏆 티볼 규칙 박사! · ':''}통과 ${passed} / ${L.length}단계 · ★ ${total} / ${L.length*3}<br>${saveNote()}</p></div>
