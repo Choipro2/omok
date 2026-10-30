@@ -216,7 +216,7 @@ let sbc=null;
 if(window.supabase){ try{ sbc=window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }catch(e){ sbc=null; } }
 
 const $=id=>document.getElementById(id);
-const MAXP=6, STRIKES=3, OUTS=3;
+const MAXP=6, STRIKES=3, OUTS=3, HR_RATE=0.05;
 const TEAM=[{n:'빨강팀',c:'#e53935'},{n:'파랑팀',c:'#1e63d6'}];
 const ZN=['왼쪽 끝','왼쪽','가운데','오른쪽','오른쪽 끝'];
 const ZA=[-34,-17,0,17,34];
@@ -333,16 +333,16 @@ function resolve(q){
     if(s.strikes>=STRIKES){ s.outs++; return showRes({kind:'k',cls:'out',text:`헛스윙 ${STRIKES}번! ${nm(s.batter)} 아웃`,outId:s.batterTok},endAtBat); }
     return showRes({kind:'miss',cls:'warn',text:`헛스윙! (${s.strikes}번째) 다시 쳐요`},()=>{ phase('swing',15000,()=>resolve('miss')); publish(); },1800);
   }
+  // 홈런은 공을 맞힌 타구의 5% 정도만 (담장을 넘기면 수비가 있어도 홈런)
+  if(Math.random()<HR_RATE){ s.q='great'; return hit(4,'홈런!! 담장을 넘어갔어요 🎉'); }
   if(q==='weak'){
     if(guard){ s.fielder=guard.id; setRes({kind:'ground',cls:'info',text:`땅볼! ${nm(guard.id)}이 잡았어요. 어디로 던질까?`}); phase('throw',10000,()=>throwResult(0)); return publish(); }
     return hit(1,'땅볼 안타! 수비가 없는 곳으로 굴러갔어요');
   }
-  if(q==='good'){
-    if(guard){ s.fielder=guard.id; setRes({kind:'flyup',cls:'info',text:`높이 뜬 공! ${nm(guard.id)}, 잡아라!`}); phase('catch',3500,()=>flyResult(false)); return publish(); }
-    return hit(2,'2루타! 수비가 없는 곳에 떨어졌어요');
-  }
-  if(guard){ s.fielder=guard.id; return hit(2,`멀리 날아간 공! ${nm(guard.id)}이 쫓아가는 사이 2루타`); }
-  return hit(4,'홈런!! 🎉');
+  // 뜬공(보통·멀리): 수비가 지키는 곳이면 잡을 기회!
+  if(guard){ s.fielder=guard.id; setRes({kind:'flyup',cls:'info',text:q==='great'?`멀리 뜬 공! ${nm(guard.id)}, 잡아라!`:`높이 뜬 공! ${nm(guard.id)}, 잡아라!`}); phase('catch',3500,()=>flyResult(false)); return publish(); }
+  if(q==='great') return hit(3,'3루타! 수비가 없는 곳으로 멀리 날아갔어요');
+  return hit(2,'2루타! 수비가 없는 곳에 떨어졌어요');
 }
 function hit(n,text,ballFrom){
   const s=S(); const b=s.bases.slice(), nb=[null,null,null], scored=[];
@@ -365,13 +365,15 @@ function throwResult(base){
   if(ok) s.outs++;
   const nb=b.slice(); const scored=[];
   for(const [fr] of movers) if(fr>0) nb[fr-1]=null;
-  for(const [fr,to,id] of movers){ if(to===outK) continue; if(to===4){ if(s.outs<OUTS) scored.push(id); } else nb[to-1]=id; }
-  s.bases=nb; s.score[s.bat]+=scored.length; s.line[s.bat][s.inning-1]+=scored.length;
+  let pushed=null;
+  for(const [fr,to,id] of movers){ if(to===outK) continue; if(to===4){ pushed=id; } else nb[to-1]=id; }
+  s.bases=nb;   // 수비가 공을 잡았으니 득점은 없어요
   let text;
-  if(ok) text=`${BNAME[base]} 포스 아웃! ${nm(outId)} 아웃`+(scored.length?` (${scored.length}점)`:'');
-  else if(base>0) text=`앗! ${BNAME[base]}는 포스 아웃이 안 돼요 (주자가 꼭 가야 하는 베이스가 아니에요). 모두 세이프`+(scored.length?`, ${scored.length}점`:'');
-  else text='시간 초과! 공을 못 던져서 모두 세이프'+(scored.length?`, ${scored.length}점`:'');
-  showRes({kind:'throw',cls:ok?'out':'safe',ballFrom:'zone',base,from:b,scored,outId,text},endAtBat,3600);
+  const np=pushed?' (수비가 공을 잡아서 득점은 없어요)':'';
+  if(ok) text=`${BNAME[base]} 포스 아웃! ${nm(outId)} 아웃`+np;
+  else if(base>0) text=`앗! ${BNAME[base]}는 포스 아웃이 안 돼요 (주자가 꼭 가야 하는 베이스가 아니에요). 모두 세이프`+np;
+  else text='시간 초과! 공을 못 던져서 모두 세이프'+np;
+  showRes({kind:'throw',cls:ok?'out':'safe',ballFrom:'zone',base,from:b,scored,outId,pushed,text},endAtBat,3600);
 }
 function endAtBat(){
   const s=S();
@@ -632,6 +634,7 @@ async function playRes(st){
     const ids=[r.batter].concat(r.from.filter(Boolean));
     for(const id of ids){ const a=rs[id]; if(!a) continue; const p0=startPos(id);
       let p1=st.bases.indexOf(id)+1; if(r.scored.includes(id)) p1=4;
+      if(r.pushed===id){ moves.push((async()=>{ await F.lin(a,...lerp(B.b3,B.home,.5),500); a.g.style.opacity=.25; })()); continue; }
       if(id===r.outId){ moves.push((async()=>{ if(r.kind==='throw'&&r.base){ await F.lin(a,...lerp(B[PATH[p0]],B[PATH[Math.min(p0+1,4)]],.6),700);} a.g.style.opacity=.3; })()); continue; }
       if(p1<=0){ if(r.kind==='k'||r.kind==='catch') { if(id===r.batter) a.g.style.opacity=.3; } continue; }
       if(p1>p0) moves.push((async()=>{ for(let k=p0+1;k<=p1;k++) await F.lin(a,...B[PATH[k]],450); if(p1===4){ F.say('득점!',200,330,'safe'); a.g.style.opacity=.4; } })());
