@@ -123,7 +123,7 @@ svg#field{width:100%;display:block;border-radius:12px;user-select:none}
     <circle class="hit" data-k="b3" cx="122" cy="282" r="22" fill="transparent"/>
     <circle class="hit" data-k="home" cx="200" cy="362" r="22" fill="transparent"/>
   </g>
-  <g id="says"></g>
+  <g id="says" pointer-events="none"></g>
 </svg>
 </template>
 
@@ -145,17 +145,20 @@ const lerp=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
 
 /* ---------- 경기장 엔진 ---------- */
 const F = {
-  svg:null, tok:0, onBase:null, onActor:null,
+  svg:null, tok:0, onBase:null, onActor:null, onField:null,
   mount(box){
     box.innerHTML = document.getElementById("fieldTpl").innerHTML;
     this.svg = box.querySelector("svg");
     this.svg.querySelectorAll(".hit").forEach(h=>h.addEventListener("click",()=>this.onBase&&this.onBase(h.dataset.k)));
+    this.svg.addEventListener("click",e=>{ if(!this.onField) return;
+      const m=this.svg.getScreenCTM(); if(!m) return;
+      const pt=new DOMPoint(e.clientX,e.clientY).matrixTransform(m.inverse()); this.onField(pt.x,pt.y); });
   },
   el(tag,attrs,parent){const e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;},
   reset(){
     this.tok++; if(!this.svg) return;
     ["#fx","#actors","#says"].forEach(s=>this.svg.querySelector(s).innerHTML="");
-    this.shade(false); this.outs(-1); this.onBase=null; this.onActor=null;
+    this.shade(false); this.outs(-1); this.onBase=null; this.onActor=null; this.onField=null;
     this.svg.querySelectorAll(".glow").forEach(g=>g.classList.remove("on"));
   },
   check(t){ if(t!==this.tok) throw CANCEL; },
@@ -351,21 +354,29 @@ const G = {
     $("gf").onclick=()=>ans(true);$("gl").onclick=()=>ans(false);$("gn").onclick=round;upd();round();
   },
   bases(area,done){
-    const order=["b1","b2","b3","home"];let i=0,laps=0;
-    area.innerHTML=`<p class="q">주자를 움직여요! 경기장에서 <u>다음에 밟을 베이스</u>를 눌러요.</p><p class="score" id="gs"></p><div class="fb" id="gfb"></div>`;
+    const order=["b1","b2","b3","home"];let i=0,laps=0,busy=false,miss=0;
+    area.innerHTML=`<p class="q">주자를 움직여요! 경기장에서 <u>다음에 밟을 베이스(흰 네모)</u>를 눌러요.</p><p class="score" id="gs"></p><div class="fb" id="gfb"></div>`;
     const $=id=>area.querySelector("#"+id);
-    F.reset(); defense(); let r=F.runner(...B.home,"나"); let busy=false;
-    const msg=()=>$("gs").textContent=`지금 위치: ${i===0?"홈":BN[order[i-1]]} → 다음은? (두 바퀴 돌면 통과, 지금 ${laps}바퀴)`;
+    F.reset(); defense(); const r=F.runner(...B.home,"나");
+    const msg=()=>{$("gs").textContent=`지금 위치: ${i===0?"홈":BN[order[i-1]]} → 다음은? (두 바퀴 돌면 통과, 지금 ${laps}바퀴)`;};
+    const hint=()=>{for(const k of order)F.glow(k,false);F.glow(order[i]);};
+    const bad=t=>{$("gfb").className="fb show bad";$("gfb").textContent=t;F.svg.classList.remove("shake");void F.svg.offsetWidth;F.svg.classList.add("shake");if(++miss>=1)hint();};
     msg();
-    F.onBase=async k=>{
+    const idle=setTimeout(()=>{if(i===0&&laps===0)hint();},6000);
+    // 베이스 근처(글자·선수 포함) 어디를 눌러도 가장 가까운 베이스로 알아들어요
+    F.onField=async(x,y)=>{
       if(busy)return;
-      if(k!==order[i]){$("gfb").className="fb show bad";$("gfb").textContent=`순서가 달라요! ${BN[k]}는 지금 갈 곳이 아니에요. 1루 → 2루 → 3루 → 홈 순서예요.`;F.svg.classList.remove("shake");void F.svg.offsetWidth;F.svg.classList.add("shake");return;}
-      busy=true;$("gfb").className="fb";
-      try{await F.lin(r,...B[k],700);}catch(e){return;}
-      i++;busy=false;
-      if(k==="home"){laps++;i=0;F.say("1점! 🎉",200,330,"warn");
-        if(laps>=2){$("gfb").className="fb show good";$("gfb").textContent="완벽해요! 베이스 순서를 다 익혔어요. 🎉";F.onBase=null;done();}
+      let k=null,best=46;
+      for(const b of order){const d=Math.hypot(x-B[b][0],y-B[b][1]);if(d<best){best=d;k=b;}}
+      if(!k){bad("베이스(흰 네모)를 눌러요! 반짝이는 곳이 다음 베이스예요.");return;}
+      if(k!==order[i]){bad(`순서가 달라요! ${BN[k]}는 지금 갈 곳이 아니에요. 1루 → 2루 → 3루 → 홈 순서예요.`);return;}
+      busy=true;clearTimeout(idle);$("gfb").className="fb";F.glow(k,false);
+      try{await F.lin(r,...B[k],600);}catch(e){return;}finally{busy=false;}
+      i++;
+      if(k==="home"){laps++;i=0;const s=F.say("1점! 🎉",200,320,"warn");setTimeout(()=>s.remove(),1200);
+        if(laps>=2){$("gfb").className="fb show good";$("gfb").textContent="완벽해요! 베이스 순서를 다 익혔어요. 🎉";F.onField=null;done();}
       }
+      if(miss)hint();
       msg();
     };
   },
