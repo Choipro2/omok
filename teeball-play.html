@@ -86,6 +86,7 @@ svg#field{width:100%;display:block;border-radius:12px;user-select:none}
 .tcol h3{margin:0 0 6px}.pl{font-size:19px;padding:3px 0}
 .zones{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin:8px 0}
 .zones button{padding:12px 6px;font-size:17px}.zones small{font-weight:500;font-size:13px}
+.posgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:8px 0}.posgrid button{padding:10px 4px;font-size:17px}.posgrid small{font-weight:500;font-size:13px}
 .meter{position:relative;height:44px;border-radius:12px;background:#f3c6c4;overflow:hidden;margin:12px 0;border:2px solid var(--line)}
 .meter div{position:absolute;top:0;bottom:0}
 .zone-weak{left:17%;right:17%;background:#ffe9a8}.zone-good{left:33%;right:33%;background:#b9e3a6}.zone-great{left:44%;right:44%;background:#43a047}
@@ -179,7 +180,7 @@ const F = {
     if(cls==="ball"){this.el("circle",{r:5.5,fill:"#fff",stroke:"#c62828","stroke-width":1.5},g);}
     else{
       this.el("circle",{r:11,fill,stroke:"#fff","stroke-width":2},g);
-      const t=this.el("text",{"text-anchor":"middle",y:4.5,"font-size":12,"font-weight":800,fill:"#fff"},g);t.textContent=label;
+      const t=this.el("text",{"text-anchor":"middle",y:4,"font-size":String(label).length>1?9.5:12,"font-weight":800,fill:"#fff"},g);t.textContent=label;
     }
     const a={g,x,y};this.set(a,x,y);
     g.addEventListener("click",()=>this.onActor&&this.onActor(a));
@@ -216,9 +217,18 @@ let sbc=null;
 if(window.supabase){ try{ sbc=window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }catch(e){ sbc=null; } }
 
 const $=id=>document.getElementById(id);
-const MAXP=6, STRIKES=3, OUTS=3, HR_RATE=0.05;
+const MAXP=6, STRIKES=3, OUTS=3;
+// 수비 자리: 학생이 고르지 않은 자리는 컴퓨터가 지켜요
+const FPOS=['3B','SS','2B','1B','LF','CF','RF'];
+const PNAME={'1B':'1루수','2B':'2루수',SS:'유격수','3B':'3루수',LF:'좌익수',CF:'중견수',RF:'우익수',P:'투수',C:'포수'};
+const GROUND=['3B','SS',null,'2B','1B'];      // 땅볼이 가는 내야수 (가운데는 유격수·2루수 중 하나)
+const FLYTO=['LF','LF','CF','RF','RF'];        // 뜬공이 가는 외야수
+const AUTO={ground:0.65, good:0.45, great:0.25}; // 컴퓨터 수비수가 처리할 확률
+const HR_RATE=0.15;                            // 아주 잘 맞은 공이 외야를 넘어갔을 때만 홈런
+const DFLT=['SS','2B','3B','1B','CF','LF','RF'];
+const SETUP_MIN=4000;                          // 수비가 자리를 바꿀 최소 시간
 const TEAM=[{n:'빨강팀',c:'#e53935'},{n:'파랑팀',c:'#1e63d6'}];
-const ZN=['왼쪽 끝','왼쪽','가운데','오른쪽','오른쪽 끝'];
+const ZN=['3루 쪽','3루–유격수 사이','가운데','2루–1루 사이','1루 쪽'];
 const ZA=[-34,-17,0,17,34];
 const zpt=(z,d)=>{const a=ZA[z]*Math.PI/180;return [200+d*Math.sin(a),360-d*Math.cos(a)];};
 const BASEK=[null,'b1','b2','b3','home'];
@@ -297,7 +307,10 @@ function hostAct(id,a){
     case 'shuffle': if(id===s.host&&s.phase==='lobby'){ s.players.slice().sort(()=>Math.random()-.5).forEach((p,i)=>p.team=i%2); publish(); } break;
     case 'innings': if(id===s.host&&s.phase==='lobby'&&[1,2,3,4].includes(a.n)){ s.innings=a.n; publish(); } break;
     case 'start': if(id===s.host&&s.phase==='lobby'&&[0,1].every(t=>s.players.some(p=>p.team===t))) newGame(); break;
-    case 'zone': if(s.phase==='setup'&&a.z>=0&&a.z<5){ if(id===s.batter) s.bz=a.z; else if(fielders().some(p=>p.id===id)) s.picks[id]=a.z; else break; if(setupDone()) toSwing(); else publish(); } break;
+    case 'zone': if(s.phase==='setup'&&id===s.batter&&a.z>=0&&a.z<5){ s.bz=a.z; if(setupDone()) toSwing(); else publish(); } break;
+    case 'pos': if(s.phase==='setup'&&FPOS.includes(a.pos)&&fielders().some(p=>p.id===id)){
+      const taken=Object.entries(s.picks).some(([k,v])=>k!==id&&v===a.pos);
+      if(!taken){ s.picks[id]=a.pos; if(setupDone()) toSwing(); else publish(); } } break;
     case 'swing': if(s.phase==='swing'&&id===s.batter&&['miss','weak','good','great'].includes(a.q)) resolve(a.q); break;
     case 'catch': if(s.phase==='catch'&&id===s.fielder) flyResult(true); break;
     case 'throw': if(s.phase==='throw'&&id===s.fielder&&a.base>=1&&a.base<=4) throwResult(a.base); break;
@@ -308,22 +321,22 @@ function newGame(){
   const s=S(); Object.assign(s,{inning:1,bat:0,score:[0,0],line:[[],[]],order:[0,0],res:null});
   startHalf();
 }
-function startHalf(){ const s=S(); s.outs=0; s.bases=[null,null,null]; (s.line[s.bat][s.inning-1]=0); nextBatter(); }
+function startHalf(){ const s=S(); s.outs=0; s.bases=[null,null,null]; s.picks={}; (s.line[s.bat][s.inning-1]=0); nextBatter(); }
 function nextBatter(){
   const s=S(), list=batters(), n=list.length; let idx=s.order[s.bat]%n;
   for(let k=0;k<n;k++){ const j=(s.order[s.bat]+k)%n; if(list[j].on){idx=j;break;} }
   s.batter=list[idx].id; s.batterTok=s.batter+'#'+(++H.seq); s.order[s.bat]=idx+1;
-  Object.assign(s,{strikes:0,picks:{},bz:null,fielder:null,q:null});
+  Object.assign(s,{strikes:0,bz:null,fielder:null,fpos:null,q:null,setupAt:Date.now()});   // 수비 자리는 반 이닝 동안 그대로
   phase('setup',15000,()=>toSwing());
   publish();
 }
-function setupDone(){ const s=S(); const bOn=(s.players.find(p=>p.id===s.batter)||{}).on; return (s.bz!=null||!bOn) && fielders().filter(p=>p.on).every(p=>s.picks[p.id]!=null); }
+function setupDone(){ const s=S(); const bOn=(s.players.find(p=>p.id===s.batter)||{}).on; return Date.now()-(s.setupAt||0)>=SETUP_MIN && (s.bz!=null||!bOn) && fielders().filter(p=>p.on).every(p=>s.picks[p.id]!=null); }
 function toSwing(){
   const s=S(); if(s.bz==null) s.bz=rnd(5);
-  for(const p of fielders()) if(s.picks[p.id]==null) s.picks[p.id]=rnd(5);
+  for(const p of fielders()) if(!FPOS.includes(s.picks[p.id])) s.picks[p.id]=DFLT.find(k=>!Object.values(s.picks).includes(k));
   phase('swing',15000,()=>resolve('miss')); publish();
 }
-function setRes(r){ const s=S(); s.res=Object.assign({id:++resId,z:s.bz,q:s.q,from:s.bases.slice(),batter:s.batterTok,fielder:s.fielder,scored:[],outId:null},r); }
+function setRes(r){ const s=S(); s.res=Object.assign({id:++resId,z:s.bz,q:s.q,from:s.bases.slice(),batter:s.batterTok,fielder:s.fielder,fpos:s.fpos,scored:[],outId:null},r); }
 function showRes(r,after,ms){ setRes(r); phase('result',ms||3200,after); publish(); }
 function resolve(q){
   const s=S(); s.q=q;
@@ -333,16 +346,27 @@ function resolve(q){
     if(s.strikes>=STRIKES){ s.outs++; return showRes({kind:'k',cls:'out',text:`헛스윙 ${STRIKES}번! ${nm(s.batter)} 아웃`,outId:s.batterTok},endAtBat); }
     return showRes({kind:'miss',cls:'warn',text:`헛스윙! (${s.strikes}번째) 다시 쳐요`},()=>{ phase('swing',15000,()=>resolve('miss')); publish(); },1800);
   }
-  // 홈런은 공을 맞힌 타구의 5% 정도만 (담장을 넘기면 수비가 있어도 홈런)
-  if(Math.random()<HR_RATE){ s.q='great'; return hit(4,'홈런!! 담장을 넘어갔어요 🎉'); }
-  if(q==='weak'){
-    if(guard){ s.fielder=guard.id; setRes({kind:'ground',cls:'info',text:`땅볼! ${nm(guard.id)}이 잡았어요. 어디로 던질까?`}); phase('throw',10000,()=>throwResult(0)); return publish(); }
-    return hit(1,'땅볼 안타! 수비가 없는 곳으로 굴러갔어요');
+  // 타구 방향(구역)과 세기로 공을 처리할 수비 자리를 정해요
+  const z=s.bz, pos = q==='weak' ? (GROUND[z]||(Math.random()<.5?'SS':'2B')) : FLYTO[z];
+  s.fpos=pos;
+  const own=Object.keys(s.picks).find(id=>s.picks[id]===pos && fielders().some(p=>p.id===id&&p.on));
+  const pn=PNAME[pos];
+  if(own){   // 친구가 지키는 자리: 직접 잡거나 던져요
+    s.fielder=own;
+    if(q==='weak'){ setRes({kind:'ground',cls:'info',text:`땅볼! ${nm(own)}(${pn})이 잡았어요. 어디로 던질까?`}); phase('throw',10000,()=>throwResult(0)); return publish(); }
+    setRes({kind:'flyup',cls:'info',text:q==='great'?`멀리 뜬 공! ${nm(own)}(${pn}), 잡아라!`:`뜬 공! ${nm(own)}(${pn}), 잡아라!`}); phase('catch',3500,()=>flyResult(false)); return publish();
   }
-  // 뜬공(보통·멀리): 수비가 지키는 곳이면 잡을 기회!
-  if(guard){ s.fielder=guard.id; setRes({kind:'flyup',cls:'info',text:q==='great'?`멀리 뜬 공! ${nm(guard.id)}, 잡아라!`:`높이 뜬 공! ${nm(guard.id)}, 잡아라!`}); phase('catch',3500,()=>flyResult(false)); return publish(); }
-  if(q==='great') return hit(3,'3루타! 수비가 없는 곳으로 멀리 날아갔어요');
-  return hit(2,'2루타! 수비가 없는 곳에 떨어졌어요');
+  s.fielder=null; const cp=`컴퓨터 ${pn}`;   // 컴퓨터 수비수
+  if(q==='weak'){
+    if(Math.random()<AUTO.ground) return throwResult(1,`땅볼 아웃! ${cp}가 잡아서 1루로 던졌어요`);
+    return hit(1,`내야 안타! ${cp}가 공을 놓쳤어요`);
+  }
+  if(Math.random()<AUTO[q]) return flyResult(true,`플라이 아웃! ${cp}가 잡았어요`);
+  if(q==='good') return Math.random()<0.65 ? hit(1,`안타! ${cp} 앞에 떨어졌어요`) : hit(2,`2루타! ${cp} 옆으로 빠졌어요`);
+  const r=Math.random();
+  if(r<HR_RATE){ s.fpos=null; return hit(4,'홈런!! 담장을 넘어갔어요 🎉'); }
+  if(r<HR_RATE+0.35) return hit(3,`3루타! ${cp} 머리 위로 날아갔어요`);
+  return hit(2,`2루타! ${cp}가 못 잡았어요`);
 }
 function hit(n,text,ballFrom){
   const s=S(); const b=s.bases.slice(), nb=[null,null,null], scored=[];
@@ -351,12 +375,13 @@ function hit(n,text,ballFrom){
   const from=b; s.bases=nb; s.score[s.bat]+=scored.length; s.line[s.bat][s.inning-1]+=scored.length;
   showRes({kind:n===4?'hr':'hit',cls:'safe',n,from,scored,ballFrom:ballFrom||'home',text:text+(scored.length?` ${scored.length}점!`:'')},endAtBat);
 }
-function flyResult(caught){
+function flyResult(caught,autoText){
   const s=S();
-  if(caught){ s.outs++; return showRes({kind:'catch',cls:'out',ballFrom:'zone',text:`플라이 아웃! ${nm(s.fielder)}이 땅에 닿기 전에 잡았어요`,outId:s.batterTok},endAtBat); }
+  if(caught){ s.outs++; return showRes({kind:'catch',cls:'out',ballFrom:autoText?'home':'zone',text:autoText||`플라이 아웃! ${nm(s.fielder)}(${PNAME[s.fpos]})이 땅에 닿기 전에 잡았어요`,outId:s.batterTok},endAtBat); }
+  if(s.q==='great') return hit(2,'앗, 놓쳤어요! 공이 뒤로 빠져서 2루타','zone');
   hit(1,'앗, 놓쳤어요! 공이 땅에 떨어져서 안타','zone');
 }
-function throwResult(base){
+function throwResult(base,autoText){
   const s=S(), b=s.bases.slice();
   const f=[false,true,!!b[0],!!(b[0]&&b[1]),!!(b[0]&&b[1]&&b[2])];
   const movers=[[0,1,s.batterTok]]; if(f[2]) movers.push([1,2,b[0]]); if(f[3]) movers.push([2,3,b[1]]); if(f[4]) movers.push([3,4,b[2]]);
@@ -373,7 +398,8 @@ function throwResult(base){
   if(ok) text=`${BNAME[base]} 포스 아웃! ${nm(outId)} 아웃`+np;
   else if(base>0) text=`앗! ${BNAME[base]}는 포스 아웃이 안 돼요 (주자가 꼭 가야 하는 베이스가 아니에요). 모두 세이프`+np;
   else text='시간 초과! 공을 못 던져서 모두 세이프'+np;
-  showRes({kind:'throw',cls:ok?'out':'safe',ballFrom:'zone',base,from:b,scored,outId,pushed,text},endAtBat,3600);
+  if(autoText) text=autoText+np;
+  showRes({kind:'throw',cls:ok?'out':'safe',ballFrom:autoText?'home':'zone',base,from:b,scored,outId,pushed,text},endAtBat,3600);
 }
 function endAtBat(){
   const s=S();
@@ -406,7 +432,8 @@ function homeScreen(msg){
   app.innerHTML=`<div class="hero"><h2>⚾ 친구들과 티볼 경기</h2>
     <p>2~${MAXP}명이 두 팀으로 나눠 경기해요. 각자 윈도우북에서 같은 방 번호로 들어와요.</p>
     <div class="rule"><b>공격팀</b> 타자는 칠 방향을 고르고, 움직이는 막대가 가운데에 올 때 <b>치기!</b><br>
-    <b>수비팀</b>은 지킬 곳을 골라요. 공이 오면 뜬공은 <b>잡고</b>, 땅볼은 <b>포스 아웃이 되는 베이스로 던져요</b>.</div>
+    <b>수비팀</b>은 1루수·2루수·유격수·3루수·외야수 중 <b>맡을 자리</b>를 골라요. 나머지 자리는 컴퓨터가 지켜요.<br>
+    공이 내 자리로 오면 뜬공은 <b>잡고</b>, 땅볼은 <b>포스 아웃이 되는 베이스로 던져요</b>.</div>
     ${has?`<p>👤 <b>${esc(nm(ME))}</b> (${esc(ME)}) <a href="teeball.html" class="note">이름 바꾸기·규칙 배우기</a></p>`
          :`<p class="fb show bad">먼저 <a href="teeball.html">규칙 배우기 화면</a>에서 학년·반·번호를 골라 주세요.</p>`}
     <div class="row"><button class="big" id="mk" ${has?'':'disabled'}>방 만들기</button>
@@ -538,22 +565,27 @@ function renderGame(st,prev){
 function renderInfo(st){
   const r=st.res, el=$('info');
   if(['result','throw','catch','switch'].includes(st.phase)&&r){ el.className='info '+(r.cls||'info'); el.textContent=r.text; }
-  else { el.className='info'; el.textContent=st.phase==='setup'?`${nm(st.batter)} 타석! 공격은 칠 곳, 수비는 지킬 곳을 골라요`:`${nm(st.batter)} 타석! 치는 중…`; }
+  else { el.className='info'; el.textContent=st.phase==='setup'?`${nm(st.batter)} 타석! 공격은 칠 곳, 수비는 맡을 자리를 골라요`:`${nm(st.batter)} 타석! 치는 중…`; }
 }
 function cdText(){ return localEnd?Math.max(0,Math.ceil((localEnd-Date.now())/1000)):''; }
 setInterval(()=>{ const c=$('cd'); if(c) c.textContent=cdText()+'초'; },250);
-function zoneBtns(sel,labels){ return `<div class="zones">${ZN.map((n,z)=>`<button data-z="${z}" class="${sel===z?'':'ghost'}">${n}${labels&&labels[z]?`<br><small>${labels[z]}</small>`:''}</button>`).join('')}</div>`; }
+function zoneBtns(sel){ return `<div class="zones">${ZN.map((n,z)=>`<button data-z="${z}" class="${sel===z?'':'ghost'}">${n}<br><small>땅볼→${GROUND[z]?PNAME[GROUND[z]]:'유격수·2루수'} · 뜬공→${PNAME[FLYTO[z]]}</small></button>`).join('')}</div>`; }
+function posBtns(st,myT){
+  const who={}; for(const pl of st.players) if(pl.team===myT&&st.picks[pl.id]) who[st.picks[pl.id]]=pl.id;
+  const b=k=>{ const id=who[k], mine=id===ME; return `<button data-pos="${k}" class="${mine?'':'ghost'}" style="grid-column:${{LF:'1/3',CF:'3/5',RF:'5/7',SS:'2/4','2B':'4/6','3B':'1/3','1B':'5/7'}[k]}" ${id&&!mine?'disabled':''}>${PNAME[k]}<br><small>${id?(mine?'⭐ 나':nm(id)):'컴퓨터'}</small></button>`; };
+  return `<div class="posgrid">${['LF','CF','RF','SS','2B','3B','1B'].map(b).join('')}</div>`;
+}
 function renderPanel(st){
   const p=$('panel'), myT=teamOf(st,ME), bat=myT===st.bat, me=ME;
   cancelAnimationFrame(meterRaf);
   if(st.phase==='setup'){
     if(me===st.batter){
-      p.innerHTML=`<p class="q">⚾ 내 차례! 어디로 칠까요? <span class="cd" id="cd"></span></p>${zoneBtns(st.bz)}<p class="note">상대 수비가 없는 곳을 노려요! 고른 뒤 치기 막대가 나와요.</p>`;
+      p.innerHTML=`<p class="q">⚾ 내 차례! 어디로 칠까요? <span class="cd" id="cd"></span></p>${zoneBtns(st.bz)}<p class="note">친구 수비수는 컴퓨터보다 잘 잡아요. 친구가 없을 것 같은 곳을 노려요! 고른 뒤 치기 막대가 나와요.</p>`;
     } else if(!bat){
-      const labels={}; for(const pl of st.players) if(pl.team===myT&&st.picks[pl.id]!=null) labels[st.picks[pl.id]]=(labels[st.picks[pl.id]]?labels[st.picks[pl.id]]+', ':'')+nm(pl.id);
-      p.innerHTML=`<p class="q">🧤 수비! 어디를 지킬까요? <span class="cd" id="cd"></span></p>${zoneBtns(st.picks[me],labels)}<p class="note">우리 팀끼리 겹치지 않게 나눠 지키면 좋아요. (친구가 고른 곳이 버튼에 보여요)</p>`;
+      p.innerHTML=`<p class="q">🧤 수비! 맡을 자리를 골라요 <span class="cd" id="cd"></span></p>${posBtns(st,myT)}<p class="note">고른 자리는 이번 공격이 끝날 때까지 그대로예요. 타자가 칠 것 같은 곳으로 옮겨도 돼요. 안 고른 자리는 컴퓨터가 지켜요.</p>`;
     } else p.innerHTML=`<p class="q">상대 팀이 수비 위치를 정하는 중… <span class="cd" id="cd"></span></p><p class="note">${nm(st.batter)} 다음 타자를 응원해요! 📣</p>`;
     p.querySelectorAll('[data-z]').forEach(b=>b.onclick=()=>act({type:'zone',z:+b.dataset.z}));
+    p.querySelectorAll('[data-pos]').forEach(b=>b.onclick=()=>act({type:'pos',pos:b.dataset.pos}));
   } else if(st.phase==='swing'){
     if(me===st.batter){
       p.innerHTML=`<p class="q">막대가 <b style="color:#2e7d32">가운데 초록색</b>에 올 때 치기! <span class="cd" id="cd"></span></p>
@@ -563,11 +595,11 @@ function renderPanel(st){
     } else p.innerHTML=`<p class="q">${nm(st.batter)} 타자가 치는 중… <span class="cd" id="cd"></span></p>`;
   } else if(st.phase==='catch'){
     p.innerHTML= me===st.fielder ? `<div class="row"><button class="big catch" id="catch">🧤 잡아라! <span id="cd"></span></button></div><p class="note">땅에 닿기 전에 눌러야 플라이 아웃!</p>`
-      : `<p class="q">높이 뜬 공! ${nm(st.fielder)}이 잡을 수 있을까? <span class="cd" id="cd"></span></p>`;
+      : `<p class="q">높이 뜬 공! ${nm(st.fielder)}(${PNAME[st.fpos]})이 잡을 수 있을까? <span class="cd" id="cd"></span></p>`;
     const c=$('catch'); if(c) c.onclick=()=>{c.disabled=true;act({type:'catch'});};
   } else if(st.phase==='throw'){
     const runners=['1루','2루','3루'].map((n,i)=>`${n}: ${st.bases[i]?'🏃 '+nm(st.bases[i]):'비어 있음'}`).join(' · ');
-    p.innerHTML= me===st.fielder ? `<p class="q">공을 잡았어요! 어디로 던질까요? <span class="cd" id="cd"></span></p>
+    p.innerHTML= me===st.fielder ? `<p class="q">${PNAME[st.fpos]}인 내가 공을 잡았어요! 어디로 던질까요? <span class="cd" id="cd"></span></p>
         <p class="note">타자 ${nm(st.batter)}는 1루로 달리는 중 · ${runners}</p>
         <div class="zones">${[1,2,3,4].map(k=>`<button data-b="${k}">${BNAME[k]}</button>`).join('')}</div>
         <p class="note">💡 주자가 <b>꼭 가야 하는 베이스</b>로 던져야 포스 아웃!</p>`
@@ -593,23 +625,25 @@ function startMeter(){
 function setStatusExtra(t){ const e=$('extra'); if(e) e.textContent=t; }
 
 /* ---------- 경기장 그림 ---------- */
-const DIST={weak:120,good:190,great:250};
-function fieldPos(st,p,reveal){
-  const z=st.picks&&st.picks[p.id];
-  if(z!=null&&(reveal||teamOf(st,ME)===p.team)) return zpt(z,205);
-  const list=st.players.filter(x=>x.team===p.team), i=list.indexOf(p);
-  return zpt([1,3,2,0,4,2][i]??2,195);
-}
+const DIST={weak:150,good:215,great:250};
+const tgtOf=r=>zpt(r.z, r.kind==='hr'?300:(DIST[r.q]||170));
 function drawBoard(st,opt){
   opt=opt||{}; F.reset(); F.outs(st.outs);
-  const bt=st.bat, ft=1-bt, reveal=!['setup','swing'].includes(st.phase);
+  const bt=st.bat, ft=1-bt, reveal=!['setup','swing'].includes(st.phase), mine=teamOf(st,ME)===ft;
+  const owner={}; for(const [id,k] of Object.entries(st.picks||{})) if(FPOS.includes(k)) owner[k]=id;
   const fs={};
-  for(const p of st.players.filter(x=>x.team===ft)){ const [x,y]=fieldPos(st,p,reveal); fs[p.id]=F.actor(x,y,TEAM[ft].c,sh(p.id)); if(!p.on) fs[p.id].g.style.opacity=.35; }
+  for(const k of ['P','C'].concat(FPOS)){
+    const id=owner[k], showId=id&&(reveal||mine);
+    const a=F.actor(...POS[k], TEAM[ft].c, showId?sh(id):({'1B':'1루','2B':'2루','3B':'3루'}[k]||SHORT[k]));
+    if((reveal||mine)&&!id) a.g.style.opacity=.6;          // 컴퓨터 수비수는 흐리게
+    if(id&&id===ME){ a.g.querySelector('circle').setAttribute('stroke','#ffeb3b'); a.g.querySelector('circle').setAttribute('stroke-width','3.5'); }
+    fs[k]=a; if(id) fs[id]=a;
+  }
   const rs={};
   const bases=opt.bases||st.bases;
   bases.forEach((id,i)=>{ if(id) rs[id]=F.actor(...B[BASEK[i+1]],TEAM[bt].c,sh(id)); });
   if(opt.batter!==false && ['setup','swing','catch','throw'].includes(st.phase) || opt.batter){ const id=opt.batterId||st.batterTok; if(!rs[id]) rs[id]=F.actor(188,352,TEAM[bt].c,sh(id)); }
-  if((st.phase==='throw'||st.phase==='catch')&&st.res&&fs[st.fielder]){ const t=zpt(st.res.z,DIST[st.res.q]||170); F.set(fs[st.fielder],...t); F.ball(t[0]+6,t[1]-4); }
+  if((st.phase==='throw'||st.phase==='catch')&&st.res&&fs[st.fpos]){ const t=tgtOf(st.res); F.set(fs[st.fpos],...t); F.ball(t[0]+6,t[1]-4); }
   if(st.phase==='setup'||st.phase==='swing'){ if(st.bz!=null&&st.batter===ME){ const [x,y]=zpt(st.bz,200); F.say('여기로!',x,y,'warn'); } F.ball(...B.home); }
   return {fs,rs};
 }
@@ -618,7 +652,7 @@ async function playRes(st){
   try{
     if(r.kind==='switch'||r.kind==='miss'){ drawBoard(st); if(r.kind==='miss'){ F.say('헛스윙!',200,320,'warn'); } return; }
     const {fs,rs}=drawBoard(st,{bases:r.from,batter:true,batterId:r.batter});
-    const d=DIST[r.q]||170, tgt=zpt(r.z,r.kind==='hr'?300:d), fl=r.fielder&&fs[r.fielder];
+    const tgt=tgtOf(r), fl=r.fpos&&fs[r.fpos];
     const ball=F.ball(...(r.ballFrom==='zone'?tgt:B.home));
     if(fl&&r.ballFrom==='zone') F.set(fl,...tgt);
     if(r.kind==='k'){ F.say('삼진 아웃!',200,320,'out'); rs[r.batter]&&(rs[r.batter].g.style.opacity=.3); }
