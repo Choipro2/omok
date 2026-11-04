@@ -217,7 +217,7 @@ let sbc=null;
 if(window.supabase){ try{ sbc=window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }catch(e){ sbc=null; } }
 
 const $=id=>document.getElementById(id);
-const MAXP=6, STRIKES=3, OUTS=3, PROTO=3;   // 경기 규칙 버전: 방장과 다르면 안내
+const MAXP=6, STRIKES=3, OUTS=3, PROTO=3, CATCH_MS=2000;   // 뜬공 '잡아라!' 누를 수 있는 시간   // 경기 규칙 버전: 방장과 다르면 안내
 // 수비 자리: 학생이 고르지 않은 자리는 컴퓨터가 지켜요
 const FPOS=['3B','SS','2B','1B','LF','CF','RF'];
 const PNAME={'1B':'1루수','2B':'2루수',SS:'유격수','3B':'3루수',LF:'좌익수',CF:'중견수',RF:'우익수',P:'투수',C:'포수'};
@@ -355,7 +355,7 @@ function resolve(q){
   if(own){   // 친구가 지키는 자리: 직접 잡거나 던져요
     s.fielder=own;
     if(q==='weak'){ setRes({kind:'ground',cls:'info',text:`땅볼! ${nm(own)}(${pn})이 잡았어요. 어디로 던질까?`}); phase('throw',10000,()=>throwResult(0)); return publish(); }
-    setRes({kind:'flyup',cls:'info',text:q==='great'?`멀리 뜬 공! ${nm(own)}(${pn}), 잡아라!`:`뜬 공! ${nm(own)}(${pn}), 잡아라!`}); phase('catch',3500,()=>flyResult(false)); return publish();
+    setRes({kind:'flyup',cls:'info',text:q==='great'?`멀리 뜬 공! ${nm(own)}(${pn}), 잡아라!`:`뜬 공! ${nm(own)}(${pn}), 잡아라!`}); phase('catch',CATCH_MS,()=>flyResult(false)); return publish();
   }
   s.fielder=null; const cp=`컴퓨터 ${pn}`;   // 컴퓨터 수비수
   if(q==='weak'){
@@ -681,7 +681,7 @@ async function playRes(st){
     if(r.kind==='k'){ F.say('삼진 아웃!',200,320,'out'); rs[r.batter]&&(rs[r.batter].g.style.opacity=.3); }
     else if(r.ballFrom!=='zone'){
       const fly=r.q!=='weak';
-      await Promise.all([fly?F.fly(ball,...tgt,r.kind==='flyup'?2600:1300,r.kind==='hr'?140:90):F.lin(ball,...tgt,900), fl?F.move(fl,...tgt,r.kind==='flyup'?2400:900):0]);
+      await Promise.all([fly?F.fly(ball,...tgt,r.kind==='flyup'?1800:1300,r.kind==='hr'?140:90):F.lin(ball,...tgt,900), fl?F.move(fl,...tgt,r.kind==='flyup'?1600:900):0]);
     }
     if(r.kind==='throw'){ const k=BASEK[r.base||1]; if(r.base) await F.lin(ball,...B[k],600); }
     if(r.kind==='catch'){ F.say('잡았다!',tgt[0],tgt[1]-26,'out'); }
