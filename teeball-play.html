@@ -224,7 +224,8 @@ const PNAME={'1B':'1루수','2B':'2루수',SS:'유격수','3B':'3루수',LF:'좌
 const GROUND=['3B','SS',null,'2B','1B'];      // 땅볼이 가는 내야수 (가운데는 유격수·2루수 중 하나)
 const FLYTO=['LF','LF','CF','RF','RF'];        // 뜬공이 가는 외야수
 const AUTO={ground:0.75, good:0.60, great:0.40}; // 컴퓨터 수비수가 처리할 확률
-const HR_RATE=0.10;                            // 아주 잘 맞은 공이 외야를 넘어갔을 때만 홈런
+// 맞힌 공 기준 목표: 2루타 약 10%, 3루타 약 4%, 홈런 약 2% (모두 컴퓨터 수비일 때)
+const HR_RATE=0.18, TRIPLE_RATE=0.37, GOOD_DOUBLE=0.38;   // 멀리 뜬 공이 빠졌을 때 홈런·3루타 비율, 보통 뜬공이 빠졌을 때 2루타 비율
 const DFLT=['SS','2B','3B','1B','CF','LF','RF'];
 const SETUP_MIN=4000;                          // 수비가 자리를 바꿀 최소 시간
 const TEAM=[{n:'빨강팀',c:'#e53935'},{n:'파랑팀',c:'#1e63d6'}];
@@ -362,12 +363,11 @@ function resolve(q){
     return hit(1,`내야 안타! ${cp}가 공을 놓쳤어요`);
   }
   if(Math.random()<AUTO[q]) return flyResult(true,`플라이 아웃! ${cp}가 잡았어요`);
-  if(q==='good') return Math.random()<0.80 ? hit(1,`안타! ${cp} 앞에 떨어졌어요`) : hit(2,`2루타! ${cp} 옆으로 빠졌어요`);
+  if(q==='good') return Math.random()<GOOD_DOUBLE ? hit(2,`2루타! ${cp} 옆으로 빠졌어요`) : hit(1,`안타! ${cp} 앞에 떨어졌어요`);
   const r=Math.random();
   if(r<HR_RATE){ s.fpos=null; return hit(4,'홈런!! 담장을 넘어갔어요 🎉'); }
-  if(r<HR_RATE+0.15) return hit(3,`3루타! ${cp} 머리 위로 날아갔어요`);
-  if(r<HR_RATE+0.60) return hit(2,`2루타! ${cp}가 못 잡았어요`);
-  return hit(1,`안타! ${cp} 앞에 뚝 떨어졌어요`);
+  if(r<HR_RATE+TRIPLE_RATE) return hit(3,`3루타! ${cp} 머리 위로 날아갔어요`);
+  return hit(2,`2루타! ${cp}가 못 잡았어요`);
 }
 function hit(n,text,ballFrom){
   const s=S(); const b=s.bases.slice(), nb=[null,null,null], scored=[];
