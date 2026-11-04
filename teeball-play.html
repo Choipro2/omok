@@ -217,14 +217,14 @@ let sbc=null;
 if(window.supabase){ try{ sbc=window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }catch(e){ sbc=null; } }
 
 const $=id=>document.getElementById(id);
-const MAXP=6, STRIKES=3, OUTS=3;
+const MAXP=6, STRIKES=3, OUTS=3, PROTO=3;   // 경기 규칙 버전: 방장과 다르면 안내
 // 수비 자리: 학생이 고르지 않은 자리는 컴퓨터가 지켜요
 const FPOS=['3B','SS','2B','1B','LF','CF','RF'];
 const PNAME={'1B':'1루수','2B':'2루수',SS:'유격수','3B':'3루수',LF:'좌익수',CF:'중견수',RF:'우익수',P:'투수',C:'포수'};
 const GROUND=['3B','SS',null,'2B','1B'];      // 땅볼이 가는 내야수 (가운데는 유격수·2루수 중 하나)
 const FLYTO=['LF','LF','CF','RF','RF'];        // 뜬공이 가는 외야수
-const AUTO={ground:0.65, good:0.45, great:0.25}; // 컴퓨터 수비수가 처리할 확률
-const HR_RATE=0.15;                            // 아주 잘 맞은 공이 외야를 넘어갔을 때만 홈런
+const AUTO={ground:0.75, good:0.60, great:0.40}; // 컴퓨터 수비수가 처리할 확률
+const HR_RATE=0.10;                            // 아주 잘 맞은 공이 외야를 넘어갔을 때만 홈런
 const DFLT=['SS','2B','3B','1B','CF','LF','RF'];
 const SETUP_MIN=4000;                          // 수비가 자리를 바꿀 최소 시간
 const TEAM=[{n:'빨강팀',c:'#e53935'},{n:'파랑팀',c:'#1e63d6'}];
@@ -267,7 +267,7 @@ async function isApproved(name){
    ================================================================= */
 let H=null, resId=0;
 function hostInit(code){
-  H={seen:{},timer:null,seq:0,st:{v:0,code,host:ME,phase:'lobby',innings:3,players:[{id:ME,team:0,on:true}],res:null}};
+  H={seen:{},timer:null,seq:0,st:{v:0,proto:PROTO,code,host:ME,phase:'lobby',innings:3,players:[{id:ME,team:0,on:true}],res:null}};
   H.seen[ME]=Date.now();
   H.tick=setInterval(hostTick,1000);
   publish();
@@ -362,11 +362,12 @@ function resolve(q){
     return hit(1,`내야 안타! ${cp}가 공을 놓쳤어요`);
   }
   if(Math.random()<AUTO[q]) return flyResult(true,`플라이 아웃! ${cp}가 잡았어요`);
-  if(q==='good') return Math.random()<0.65 ? hit(1,`안타! ${cp} 앞에 떨어졌어요`) : hit(2,`2루타! ${cp} 옆으로 빠졌어요`);
+  if(q==='good') return Math.random()<0.80 ? hit(1,`안타! ${cp} 앞에 떨어졌어요`) : hit(2,`2루타! ${cp} 옆으로 빠졌어요`);
   const r=Math.random();
   if(r<HR_RATE){ s.fpos=null; return hit(4,'홈런!! 담장을 넘어갔어요 🎉'); }
-  if(r<HR_RATE+0.35) return hit(3,`3루타! ${cp} 머리 위로 날아갔어요`);
-  return hit(2,`2루타! ${cp}가 못 잡았어요`);
+  if(r<HR_RATE+0.15) return hit(3,`3루타! ${cp} 머리 위로 날아갔어요`);
+  if(r<HR_RATE+0.60) return hit(2,`2루타! ${cp}가 못 잡았어요`);
+  return hit(1,`안타! ${cp} 앞에 뚝 떨어졌어요`);
 }
 function hit(n,text,ballFrom){
   const s=S(); const b=s.bases.slice(), nb=[null,null,null], scored=[];
@@ -486,9 +487,17 @@ function applyState(st){
   if(!me){ if(ST) homeScreen('방에서 나왔어요.'); return; }
   lastV=st.v; lastStateAt=Date.now(); localEnd=st.left!=null?Date.now()+st.left:0;
   const prev=ST; ST=st;
+  showProtoWarn(st.proto!==PROTO);
   if(st.phase==='lobby') return renderLobby(st);
   if(st.phase==='end') return renderEnd(st);
   renderGame(st,prev);
+}
+function showProtoWarn(on){
+  let w=document.getElementById('protoWarn');
+  if(!on){ if(w) w.remove(); return; }
+  if(!w){ w=document.createElement('div'); w.id='protoWarn'; w.className='info warn'; w.style.cssText='position:sticky;top:0;z-index:5;margin:0 0 10px';
+    w.textContent='⚠️ 방장 컴퓨터가 예전 화면이에요. 방장이 F5(새로고침)를 누른 뒤 방을 다시 만들어 주세요. (지금은 수비 자리 고르기가 안 돼요)';
+    app.parentNode.insertBefore(w, app); }
 }
 function teamOf(st,id){ const p=st.players.find(x=>x.id===id); return p?p.team:-1; }
 
@@ -585,7 +594,7 @@ function renderPanel(st){
       p.innerHTML=`<p class="q">🧤 수비! 맡을 자리를 골라요 <span class="cd" id="cd"></span></p>${posBtns(st,myT)}<p class="note">고른 자리는 이번 공격이 끝날 때까지 그대로예요. 타자가 칠 것 같은 곳으로 옮겨도 돼요. 안 고른 자리는 컴퓨터가 지켜요.</p>`;
     } else p.innerHTML=`<p class="q">상대 팀이 수비 위치를 정하는 중… <span class="cd" id="cd"></span></p><p class="note">${nm(st.batter)} 다음 타자를 응원해요! 📣</p>`;
     p.querySelectorAll('[data-z]').forEach(b=>b.onclick=()=>act({type:'zone',z:+b.dataset.z}));
-    p.querySelectorAll('[data-pos]').forEach(b=>b.onclick=()=>act({type:'pos',pos:b.dataset.pos}));
+    p.querySelectorAll('[data-pos]').forEach(b=>b.onclick=()=>{ p.querySelectorAll('[data-pos]').forEach(x=>x.style.outline=''); b.style.outline='3px solid #f6b500'; act({type:'pos',pos:b.dataset.pos}); });
   } else if(st.phase==='swing'){
     if(me===st.batter){
       p.innerHTML=`<p class="q">막대가 <b style="color:#2e7d32">가운데 초록색</b>에 올 때 치기! <span class="cd" id="cd"></span></p>
