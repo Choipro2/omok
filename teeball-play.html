@@ -450,6 +450,20 @@ function homeScreen(msg){
   $('jn').onclick=async()=>{ const c=$('codeIn').value; if(c.length!==4){$('codeIn').focus();return;} if(await gate()) joinRoom(c); };
   $('codeIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('jn').click();});
 }
+// 실수로 누르지 않게: 한 번 누르면 확인 문구로 바뀌고, 3초 안에 한 번 더 눌러야 실행
+// (대기실·경기 끝 화면은 몇 초마다 다시 그려지므로 '눌러 둔 상태'를 버튼 밖에 기억해요)
+const armedUntil={};
+function armConfirm(btn,fn,msg){
+  if(!btn) return; const key=btn.id, orig=btn.textContent;
+  const text = msg || (ST&&ST.host===ME ? '정말 나갈까요? 방장이 나가면 경기가 끝나요 (한 번 더)' : '정말 나갈까요? 한 번 더 누르세요');
+  const look=on=>{ btn.textContent=on?text:orig; btn.style.background=on?'#e53935':''; btn.style.color=on?'#fff':''; };
+  const unarmLater=()=>setTimeout(()=>{ if(document.body.contains(btn) && Date.now()>=(armedUntil[key]||0)) look(false); }, Math.max(0,(armedUntil[key]||0)-Date.now())+50);
+  if(Date.now()<(armedUntil[key]||0)){ look(true); unarmLater(); }
+  btn.onclick=()=>{
+    if(Date.now()<(armedUntil[key]||0)){ armedUntil[key]=0; fn(); return; }
+    armedUntil[key]=Date.now()+3000; look(true); unarmLater();
+  };
+}
 function leave(){ clearInterval(pingTimer); clearTimeout(waitTimer); if(H){clearInterval(H.tick);clearTimeout(H.timer);H=null;} if(T){T.close();T=null;} ST=null; lastV=-1; isHost=false; F.reset(); }
 
 async function createRoom(){
@@ -516,7 +530,7 @@ function renderLobby(st){
         <button class="ghost" id="shuf">팀 섞기 🔀</button><button class="big" id="go" ${ok?'':'disabled'}>경기 시작 ▶</button></div>
         ${ok?'':'<p class="note">두 팀에 한 명 이상씩 있어야 시작할 수 있어요.</p>'}`
       :`<p class="note">${st.innings}이닝 경기 · 방장이 경기를 시작하면 바로 시작돼요.</p>`}</div>`;
-  $('out').onclick=()=>homeScreen();
+  armConfirm($('out'),()=>homeScreen());
   app.querySelectorAll('[data-team]').forEach(b=>b.onclick=()=>act({type:'team',team:+b.dataset.team}));
   if(host){ app.querySelectorAll('[data-inn]').forEach(b=>b.onclick=()=>act({type:'innings',n:+b.dataset.inn}));
     $('shuf').onclick=()=>act({type:'shuffle'}); $('go').onclick=()=>act({type:'start'}); }
@@ -533,7 +547,7 @@ function renderEnd(st){
     <p>${w>=0&&teamOf(st,ME)===w?'멋진 경기였어요! 🎉':'모두 수고했어요! 다음엔 이겨 봐요 💪'}</p></div>
     <div class="row" style="justify-content:center">${host?'<button class="big" id="again">다시 하기 (팀 정하기)</button>':'<span class="note">방장이 다시 하기를 누르면 이어서 할 수 있어요.</span>'}<button class="ghost big" id="out">나가기</button></div></div>`;
   if(host) $('again').onclick=()=>act({type:'lobby'});
-  $('out').onclick=()=>homeScreen();
+  armConfirm($('out'),()=>homeScreen());
 }
 function scoreTable(st){
   const inn=st.innings;
@@ -554,8 +568,8 @@ function renderGame(st,prev){
       </div>
       <div class="fieldbox"><div id="fbox"></div><div class="fieldtools"><span class="note" id="legend"></span><span id="outs"><span>아웃</span><i></i><i></i><i></i></span></div></div></div>`;
     F.mount($('fbox'));
-    $('out').onclick=()=>homeScreen();
-    $('stop').onclick=()=>act({type:'lobby'});
+    armConfirm($('out'),()=>homeScreen());
+    armConfirm($('stop'),()=>act({type:'lobby'}),'정말 그만할까요? 한 번 더 누르세요');
   }
   $('stop').hidden=st.host!==ME;
   const bt=st.bat, ft=1-bt;
