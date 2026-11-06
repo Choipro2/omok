@@ -649,6 +649,12 @@ function starPar(pr) {
 /* ===== 선생님 설정: Supabase (진도 저장·친구와 대전·승인) ===== */
 const SUPABASE_URL = 'https://gkvpdrindcowubudzdku.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
+/* 선생님 허락은 켠 지 1시간이 지나면 저절로 꺼져요 (오목·바둑·체스·티볼 공통) */
+const APPROVE_MS = 60*60*1000;
+const freshApproval = r => !!(r && r.approved && (!r.approved_at || Date.now()-Date.parse(r.approved_at) < APPROVE_MS));
+let apvAt = 0;   // 이 반에서 가장 최근에 허락한 시각
+function apvLeft(){ const m = Math.ceil((apvAt + APPROVE_MS - Date.now())/60000); return m>0 ? ` · ${m}분 뒤 자동으로 꺼져요` : ''; }
+
 
 (function(){
   const $ = id => document.getElementById(id);
@@ -1214,8 +1220,8 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
       if(!saved) return false;
       const r=await sbc.rpc('omok_check_pin',{p_pin:saved}); return !r.error && r.data===true;
     }
-    const {data,error}=await sbc.from('omok_players').select('approved').eq('num',name).maybeSingle();
-    if(error) throw error; return !!(data && data.approved);
+    const {data,error}=await sbc.from('omok_players').select('*').eq('num', name).maybeSingle();
+    if(error) throw error; return freshApproval(data);
   }
   let checkSeq=0;
   async function checkApproval(){
@@ -1259,20 +1265,20 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
   async function openApprove(){
     document.querySelector('.pinBox').hidden=true; $('approveBox').hidden=false;
     const tc=teacherClass(); if(!tc) return;
-    const {data}=await sbc.from('omok_players').select('num,approved').like('num', `${tc.g}${tc.c}%`);
-    approved.clear(); (data||[]).forEach(r=>{ if(r.approved) approved.add(r.num); }); renderGrid();
+    const {data}=await sbc.from('omok_players').select('*').like('num', `${tc.g}${tc.c}%`);
+    approved.clear(); apvAt=0; (data||[]).forEach(r=>{ if(freshApproval(r)){ approved.add(r.num); apvAt=Math.max(apvAt, r.approved_at?Date.parse(r.approved_at):0); } }); renderGrid();
   }
   function renderGrid(){
     const tc=teacherClass(), g=$('numGrid'); g.textContent=''; if(!tc) return;
     $('classTitle').textContent=`${tc.g}학년 ${tc.c}반`; let cnt=0;
     for(let n=1;n<=NUM_MAX;n++){ const k=keyOf(tc,n), on=approved.has(k), b=document.createElement('button'); if(on) cnt++;
       b.textContent=n+'번'; b.title=k; b.setAttribute('aria-pressed', on); b.onclick=()=>setApproval([k], !approved.has(k)); g.appendChild(b); }
-    $('approveCount').textContent=`허락 ${cnt}명`;
+    $('approveCount').textContent = `허락 ${cnt}명${cnt?apvLeft():''}`;
   }
   async function setApproval(keys,on){
     const {error}=await sbc.rpc('omok_set_approval',{p_pin:pin,p_nums:keys,p_approved:on});
     if(error){ $('approveCount').textContent='저장하지 못했어요. 다시 눌러 주세요.'; return; }
-    keys.forEach(k=>on?approved.add(k):approved.delete(k)); renderGrid();
+    if(on) apvAt=Date.now(); keys.forEach(k=> on ? approved.add(k) : approved.delete(k)); renderGrid();
   }
   const allKeys=()=>{ const tc=teacherClass(); return tc?[...Array(NUM_MAX)].map((_,i)=>keyOf(tc,i+1)):[]; };
   $('allOn').onclick=()=>setApproval(allKeys(),true); $('allOff').onclick=()=>setApproval(allKeys(),false);

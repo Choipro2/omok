@@ -213,6 +213,12 @@ const isFair=(x,y)=>(360-y)>=Math.abs(x-200)-0.5;
 /* ===== 우리 반 티볼 — 친구들과 경기 (방장 컴퓨터가 심판, Supabase broadcast) ===== */
 const SUPABASE_URL = 'https://gkvpdrindcowubudzdku.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
+/* 선생님 허락은 켠 지 1시간이 지나면 저절로 꺼져요 (오목·바둑·체스·티볼 공통) */
+const APPROVE_MS = 60*60*1000;
+const freshApproval = r => !!(r && r.approved && (!r.approved_at || Date.now()-Date.parse(r.approved_at) < APPROVE_MS));
+let apvAt = 0;   // 이 반에서 가장 최근에 허락한 시각
+function apvLeft(){ const m = Math.ceil((apvAt + APPROVE_MS - Date.now())/60000); return m>0 ? ` · ${m}분 뒤 자동으로 꺼져요` : ''; }
+
 let sbc=null;
 if(window.supabase){ try{ sbc=window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }catch(e){ sbc=null; } }
 
@@ -253,14 +259,27 @@ function makeTransport(code,onMsg){
 }
 let T=null, ROOM='', isHost=false, ST=null, lastV=-1, lastStateAt=0, pingTimer=null, waitTimer=null;
 
+/* ---------- 선생님 감시 화면으로 알리기 ---------- */
+// 들어오기·방 만들기·들어가기·허락 없이 시도·경기 시작을 기록하고, 감시 화면에 바로 알려요
+let watchCh=null, watchReady=false; const watchQ=[];
+function logEvent(ev,room){
+  if(window.__BC || !sbc || !/^\d{4}$/.test(ME)) return;
+  sbc.rpc('game_log_add',{p_num:ME,p_game:'teeball',p_event:ev,p_room:room||null}).then(()=>{},()=>{});
+  const msg={num:ME,game:'teeball',event:ev,room:room||null,at:Date.now()};
+  try{
+    if(!watchCh){ watchCh=sbc.channel('teacher-watch'); watchCh.subscribe(st=>{ if(st==='SUBSCRIBED'){ watchReady=true; while(watchQ.length) watchCh.send({type:'broadcast',event:'log',payload:watchQ.shift()}); } }); }
+    if(watchReady) watchCh.send({type:'broadcast',event:'log',payload:msg}); else watchQ.push(msg);
+  }catch(e){}
+}
+
 /* ---------- 선생님 허락 (오목·바둑·체스와 같음) ---------- */
 async function isApproved(name){
   if(window.__BC) return true;
   if(!sbc) return false;
   if(name.startsWith('선생님')){ let pin=''; try{pin=sessionStorage.getItem('omok.pin')||'';}catch(e){}
     if(!pin) return false; const r=await sbc.rpc('omok_check_pin',{p_pin:pin}); return !r.error && r.data===true; }
-  const {data,error}=await sbc.from('omok_players').select('approved').eq('num',name).maybeSingle();
-  if(error) throw error; return !!(data&&data.approved);
+  const {data,error}=await sbc.from('omok_players').select('*').eq('num', name).maybeSingle();
+  if(error) throw error; return freshApproval(data);
 }
 
 /* =================================================================
@@ -307,7 +326,7 @@ function hostAct(id,a){
     case 'team': if(s.phase==='lobby'&&(a.team===0||a.team===1)){const pl=s.players.find(x=>x.id===id); if(pl){pl.team=a.team;publish();}} break;
     case 'shuffle': if(id===s.host&&s.phase==='lobby'){ s.players.slice().sort(()=>Math.random()-.5).forEach((p,i)=>p.team=i%2); publish(); } break;
     case 'innings': if(id===s.host&&s.phase==='lobby'&&[1,2,3,4].includes(a.n)){ s.innings=a.n; publish(); } break;
-    case 'start': if(id===s.host&&s.phase==='lobby'&&[0,1].every(t=>s.players.some(p=>p.team===t))) newGame(); break;
+    case 'start': if(id===s.host&&s.phase==='lobby'&&[0,1].every(t=>s.players.some(p=>p.team===t))){ newGame(); logEvent('start',s.code); } break;
     case 'zone': if(s.phase==='setup'&&id===s.batter&&a.z>=0&&a.z<5){ s.bz=a.z; if(setupDone()) toSwing(); else publish(); } break;
     case 'pos': if(s.phase==='setup'&&FPOS.includes(a.pos)&&fielders().some(p=>p.id===id)){
       const taken=Object.entries(s.picks).some(([k,v])=>k!==id&&v===a.pos);
@@ -444,7 +463,7 @@ function homeScreen(msg){
     <p class="note"><a href="teeball.html">← 티볼 규칙 배우기</a></p></div>`;
   $('codeIn').addEventListener('input',()=>{$('codeIn').value=$('codeIn').value.replace(/\D/g,'').slice(0,4);});
   const gate=async()=>{ $('hmsg').textContent='선생님 허락을 확인하는 중…';
-    try{ if(await isApproved(ME)) return true; $('hmsg').textContent=ME.startsWith('선생님')?'체스 화면에서 선생님 비밀번호를 넣으면 선생님도 들어갈 수 있어요.':'선생님이 허락하면 친구들과 경기할 수 있어요.'; }
+    try{ if(await isApproved(ME)) return true; logEvent('denied'); $('hmsg').textContent=ME.startsWith('선생님')?'체스 화면에서 선생님 비밀번호를 넣으면 선생님도 들어갈 수 있어요.':'선생님이 허락하면 친구들과 경기할 수 있어요.'; }
     catch(e){ $('hmsg').textContent='확인하지 못했어요. 인터넷을 확인해 주세요.'; } return false; };
   $('mk').onclick=async()=>{ if(await gate()) createRoom(); };
   $('jn').onclick=async()=>{ const c=$('codeIn').value; if(c.length!==4){$('codeIn').focus();return;} if(await gate()) joinRoom(c); };
@@ -474,7 +493,7 @@ async function createRoom(){
   $('hmsg').textContent='방을 만드는 중…';
   await new Promise(r=>setTimeout(r,900));
   if(taken){ leave(); return createRoom(); }
-  hostInit(code);
+  hostInit(code); logEvent('create',code);
 }
 async function joinRoom(code){
   ROOM=code; isHost=false;
@@ -484,7 +503,7 @@ async function joinRoom(code){
   });
   try{ await T.ready; }catch(e){ return homeScreen('연결하지 못했어요. 잠시 뒤 다시 해 보세요.'); }
   $('hmsg').textContent=`${code}번 방을 찾는 중…`;
-  T.send('hello',{id:ME});
+  T.send('hello',{id:ME}); logEvent('join',code);
   waitTimer=setTimeout(()=>{ if(!ST) homeScreen(`${code}번 방이 없어요. 번호를 다시 확인해 주세요.`); },5000);
   pingTimer=setInterval(()=>{
     if(!T) return; T.send('ping',{id:ME});
@@ -704,6 +723,7 @@ async function playRes(st){
 }
 
 homeScreen();
+logEvent('open');
 
 </script>
 </body>

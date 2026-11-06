@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>선생님 감시 화면</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.106.2/dist/umd/supabase.js"></script>
+<style>
+:root{--bg:#f3f6f8;--ink:#1d2730;--muted:#5d6b77;--card:#fff;--line:#dbe3ea;--green:#2e7d32;--red:#d63a2f;--amber:#b86e00;--blue:#1e63d6}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif;background:var(--bg);color:var(--ink);font-size:17px;line-height:1.55}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:#26323d;color:#fff}
+header h1{font-size:21px;margin:0;flex:1}
+#live{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+#live i{width:12px;height:12px;border-radius:50%;background:#8a97a3;display:inline-block}
+#live.on i{background:#4cd964;box-shadow:0 0 0 0 rgba(76,217,100,.7);animation:pulse 1.6s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 10px rgba(76,217,100,0)}100%{box-shadow:0 0 0 0 rgba(76,217,100,0)}}
+main{max-width:1000px;margin:0 auto;padding:18px;display:flex;flex-direction:column;gap:16px}
+.card{background:var(--card);border:2px solid var(--line);border-radius:16px;padding:18px}
+.card h2{margin:0 0 10px;font-size:19px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+select,input{font:inherit;font-size:17px;padding:8px 10px;border-radius:10px;border:2px solid var(--line);background:#fff}
+input[type=password]{width:10ch}
+button{font:inherit;font-size:16px;font-weight:700;cursor:pointer;border:0;border-radius:12px;padding:10px 16px;background:#26323d;color:#fff}
+button.ghost{background:#e8eef3;color:var(--ink)}
+button.danger{background:var(--red)}
+button:disabled{opacity:.45;cursor:default}
+.note{font-size:14px;color:var(--muted)}
+.msg{font-weight:700}.msg.bad{color:var(--red)}.msg.ok{color:var(--green)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{background:#f6f9fb;border-radius:12px;padding:10px 14px}
+.stat b{display:block;font-size:26px;font-variant-numeric:tabular-nums}
+.stat span{font-size:14px;color:var(--muted)}
+.apv{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-radius:12px;background:#f6f9fb}
+.apv.on{background:#fff4e0}
+.apv b{font-size:18px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-size:14px;color:var(--muted);font-weight:700}
+td.t{white-space:nowrap;color:var(--muted);width:7ch}
+td.n{font-weight:800;white-space:nowrap;width:7ch}
+tr.new td{animation:flash 2.5s ease-out}
+@keyframes flash{0%{background:#ffe08a}100%{background:transparent}}
+.tag{display:inline-block;font-size:13px;font-weight:700;padding:2px 8px;border-radius:99px;margin-right:6px}
+.tag.denied{background:#fde2e1;color:var(--red)}.tag.start{background:#fff1d6;color:var(--amber)}
+.tag.create,.tag.join{background:#e3edfd;color:var(--blue)}.tag.open{background:#eef2f5;color:var(--muted)}
+.empty{color:var(--muted);text-align:center;padding:26px}
+.tablewrap{overflow-x:auto}
+@media(max-width:600px){main{padding:12px}td.t{width:auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔔 선생님 감시 화면 · 우리 반 티볼</h1>
+  <span id="live"><i></i><span id="liveTxt">꺼짐</span></span>
+</header>
+<main>
+  <section class="card" id="setup">
+    <h2>감시 시작하기</h2>
+    <div class="row">
+      <label>반 <select id="grade"></select> <select id="cls"></select></label>
+      <label>선생님 비밀번호 <input type="password" id="pin" autocomplete="off"></label>
+      <button id="start">감시 시작</button>
+    </div>
+    <p class="msg" id="setupMsg"></p>
+    <p class="note">감시 중에는 학생이 티볼 경기 화면에 들어오거나 방을 만들면 <b>소리와 윈도우 알림</b>이 와요. 이 탭은 닫지 말고 켜 두세요(최소화는 괜찮아요). 처음 시작할 때 알림 허용 창이 뜨면 <b>허용</b>을 눌러 주세요.</p>
+  </section>
+
+  <section class="card" id="panel" hidden>
+    <div class="row" style="justify-content:space-between">
+      <h2 id="panelTitle" style="margin:0"></h2>
+      <div class="row"><label class="note"><input type="checkbox" id="sound" checked> 소리</label><button class="ghost" id="stop">감시 끄기</button></div>
+    </div>
+    <div class="stats" style="margin-top:12px">
+      <div class="stat"><b id="sNow">0</b><span>최근 10분 동안 들어온 학생</span></div>
+      <div class="stat"><b id="sToday">0</b><span>오늘 들어온 학생</span></div>
+      <div class="stat"><b id="sDenied">0</b><span>오늘 허락 없이 시도</span></div>
+    </div>
+    <div class="apv" id="apv" style="margin-top:12px">
+      <span id="apvTxt">허락 상태를 확인하는 중…</span>
+      <span style="flex:1"></span>
+      <button class="danger" id="apvOff">지금 모두 끄기</button>
+      <button class="ghost" id="apvOn">모두 허락 (1시간)</button>
+    </div>
+    <p class="note" id="lastCheck"></p>
+  </section>
+
+  <section class="card" id="logCard" hidden>
+    <h2>오늘 기록</h2>
+    <div class="tablewrap"><table><thead><tr><th>시간</th><th>번호</th><th>무엇을 했나요</th></tr></thead><tbody id="log"></tbody></table></div>
+  </section>
+</main>
+<script>
+const SUPABASE_URL = 'https://gkvpdrindcowubudzdku.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_JkJ3soFv3kwrmX5vgzvu_w_OYnHWa-g';
+const APPROVE_MS = 60*60*1000;
+const $ = id => document.getElementById(id);
+let sbc=null; try{ sbc=window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }catch(e){}
+
+const EV = { open:'티볼 경기 화면에 들어왔어요', create:'방을 만들었어요', join:'방에 들어갔어요', start:'경기를 시작했어요', denied:'허락 없이 들어가려고 했어요' };
+const GAME = { teeball:'티볼' };
+const evText = r => EV[r.event] + (r.room ? ` (방 ${r.room})` : '');
+
+// 반 고르기 (선생님 이름이 저장돼 있으면 그 반으로)
+for(const g of [1,2,3,4,5,6]) $('grade').add(new Option(g+'학년', g));
+$('cls').add(new Option('전체 반', ''));
+for(const c of [1,2,3,4,5,6,7,8,9]) $('cls').add(new Option(c+'반', c));
+try{ const n=JSON.parse(localStorage.getItem('omok.name2')||'""'); const m=/^선생님(\d)0(\d)$/.exec(n)||/^(\d)(\d)\d\d$/.exec(n);
+  if(m){ $('grade').value=m[1]; $('cls').value=m[2]; } else { $('grade').value='4'; } }catch(e){ $('grade').value='4'; }
+try{ $('pin').value=sessionStorage.getItem('omok.pin')||''; }catch(e){}
+
+let PIN='', PREFIX='', watching=false, pollT=null, apvT=null, ch=null, lastIds=new Set(), firstLoad=true, unread=0;
+const recentBroadcast=[];   // 방송으로 먼저 받은 알림 (같은 일을 두 번 알리지 않게)
+
+$('start').onclick = async () => {
+  $('setupMsg').className='msg'; $('setupMsg').textContent='확인하는 중…';
+  if(!sbc){ $('setupMsg').className='msg bad'; $('setupMsg').textContent='서버에 연결하지 못했어요. 인터넷을 확인해 주세요.'; return; }
+  const pin=$('pin').value;
+  const r=await sbc.rpc('omok_check_pin',{p_pin:pin});
+  if(r.error || r.data!==true){ $('setupMsg').className='msg bad'; $('setupMsg').textContent = r.error ? '확인하지 못했어요. 잠시 뒤 다시 해 보세요.' : '비밀번호가 맞지 않아요.'; return; }
+  PIN=pin; try{ sessionStorage.setItem('omok.pin',pin); }catch(e){}
+  PREFIX = $('grade').value + ($('cls').value||'');
+  primeAudio();
+  if('Notification' in window && Notification.permission==='default'){ try{ await Notification.requestPermission(); }catch(e){} }
+  startWatching();
+};
+$('stop').onclick = () => { stopWatching(); };
+
+function classLabel(){ return $('cls').value ? `${$('grade').value}학년 ${$('cls').value}반` : `${$('grade').value}학년 전체`; }
+function startWatching(){
+  watching=true; firstLoad=true; lastIds=new Set();
+  $('setup').hidden=true; $('panel').hidden=false; $('logCard').hidden=false;
+  $('panelTitle').textContent = `${classLabel()} 감시 중`;
+  $('apv').hidden = !$('cls').value;
+  $('live').className='on'; $('liveTxt').textContent='감시 중';
+  const notifNote = !('Notification' in window) ? ' · 이 브라우저는 윈도우 알림을 지원하지 않아요' : Notification.permission==='denied' ? ' · 윈도우 알림이 차단되어 있어요(주소창 왼쪽 자물쇠에서 허용)' : '';
+  $('lastCheck').dataset.extra = notifNote;
+  // 학생 화면이 보내는 신호를 바로 받기
+  ch = sbc.channel('teacher-watch');
+  ch.on('broadcast',{event:'log'},({payload:p})=>{
+    if(!p || typeof p.num!=='string' || !/^\d{4}$/.test(p.num) || !p.num.startsWith(PREFIX) || !EV[p.event]) return;
+    recentBroadcast.push({num:p.num, event:p.event, t:Date.now()});
+    alertTeacher(p);
+    setTimeout(poll, 1200);
+  });
+  ch.subscribe();
+  poll(); pollT=setInterval(poll, 10000);
+  clearInterval(apvT); apvT=setInterval(refreshApproval, 30000); refreshApproval();
+}
+function stopWatching(){
+  watching=false; clearInterval(pollT); clearInterval(apvT); if(ch){ try{ sbc.removeChannel(ch); }catch(e){} ch=null; }
+  $('setup').hidden=false; $('panel').hidden=true; $('logCard').hidden=true;
+  $('live').className=''; $('liveTxt').textContent='꺼짐';
+}
+
+// 기록 불러오기 (오늘 0시부터)
+async function poll(){
+  if(!watching) return;
+  const since=new Date(); since.setHours(0,0,0,0);
+  const {data,error}=await sbc.rpc('game_log_list',{p_pin:PIN,p_prefix:PREFIX,p_since:since.toISOString()});
+  const now=new Date();
+  if(error){ $('lastCheck').textContent = /function|does not exist/i.test(error.message||'') ? '⚠️ 감시용 설정(SQL)이 아직 실행되지 않았어요.' : `⚠️ 기록을 불러오지 못했어요 (${hm(now)})`; return; }
+  $('lastCheck').textContent = `마지막 확인 ${hm(now,true)} · 10초마다 새로 확인해요${$('lastCheck').dataset.extra||''}`;
+  const rows=data||[];
+  // 방송을 놓친 새 기록도 알리기
+  if(!firstLoad) for(const r of rows) if(!lastIds.has(r.id)){
+    const t=Date.parse(r.at);
+    const dup=recentBroadcast.some(b=>b.num===r.num&&b.event===r.event&&Math.abs(b.t-t)<30000);
+    if(!dup && Date.now()-t<120000) alertTeacher(r);
+  }
+  renderLog(rows, firstLoad?null:lastIds);
+  lastIds=new Set(rows.map(r=>r.id)); firstLoad=false;
+  const today=new Set(rows.filter(r=>r.event!=='denied').map(r=>r.num));
+  const recent=new Set(rows.filter(r=>r.event!=='denied' && Date.now()-Date.parse(r.at)<600000).map(r=>r.num));
+  $('sToday').textContent=today.size; $('sNow').textContent=recent.size;
+  $('sDenied').textContent=rows.filter(r=>r.event==='denied').length;
+}
+function renderLog(rows, prev){
+  const tb=$('log'); tb.textContent='';
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="3" class="empty">오늘은 아직 기록이 없어요.</td></tr>'; return; }
+  for(const r of rows){
+    const tr=document.createElement('tr'); if(prev && !prev.has(r.id)) tr.className='new';
+    const d=new Date(r.at);
+    tr.innerHTML=`<td class="t">${hm(d)}</td><td class="n"></td><td><span class="tag ${r.event}"></span><span class="tx"></span></td>`;
+    tr.querySelector('.n').textContent = `${+r.num.slice(2)}번` + ($('cls').value?'':` (${r.num[0]}-${r.num[1]})`);
+    tr.querySelector('.tag').textContent = GAME[r.game]||r.game;
+    tr.querySelector('.tx').textContent = evText(r);
+    tb.appendChild(tr);
+  }
+}
+const hm=(d,sec)=>`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}${sec?':'+String(d.getSeconds()).padStart(2,'0'):''}`;
+
+// 알림: 소리 + 윈도우 알림 + 탭 제목
+function alertTeacher(r){
+  const who = `${r.num[0]}학년 ${r.num[1]}반 ${+r.num.slice(2)}번`;
+  const body = `${who} · ${evText(r)}`;
+  if($('sound').checked) beep(r.event==='denied'?2:(r.event==='open'?1:3));
+  if('Notification' in window && Notification.permission==='granted'){
+    try{ const n=new Notification(`🔔 ${GAME[r.game]||'게임'} 알림`, {body, tag:`${r.num}-${r.event}-${r.room||''}`, renotify:true}); n.onclick=()=>{ window.focus(); n.close(); }; }catch(e){}
+  }
+  if(document.hidden){ unread++; document.title=`(${unread}) 선생님 감시 화면`; }
+}
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ unread=0; document.title='선생님 감시 화면'; } });
+let actx=null;
+function primeAudio(){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); }catch(e){} }
+function beep(n){
+  if(!actx) return;
+  for(let i=0;i<n;i++){ const o=actx.createOscillator(), g=actx.createGain(), t=actx.currentTime+i*0.22;
+    o.frequency.value = i%2 ? 660 : 880; g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.25,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+0.18);
+    o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t+0.2); }
+}
+
+// 이 반의 허락 상태와 끄기/켜기
+async function refreshApproval(){
+  if(!watching || !$('cls').value) return;
+  const {data,error}=await sbc.from('omok_players').select('*').like('num', PREFIX+'%');
+  if(error){ $('apvTxt').textContent='허락 상태를 불러오지 못했어요.'; return; }
+  let cnt=0, at=0;
+  for(const r of data||[]) if(r.approved && (!r.approved_at || Date.now()-Date.parse(r.approved_at)<APPROVE_MS)){ cnt++; at=Math.max(at, r.approved_at?Date.parse(r.approved_at):0); }
+  const left = at ? Math.ceil((at+APPROVE_MS-Date.now())/60000) : 0;
+  $('apv').classList.toggle('on', cnt>0);
+  $('apvTxt').innerHTML = cnt ? `<b>친구와 대전 ${cnt>=60?'모두 허락 중':`허락 ${cnt}명`}</b>${left>0?` · ${left}분 뒤 자동으로 꺼져요`:''}` : '<b>친구와 대전 허락: 모두 꺼짐</b> · 학생은 방을 만들거나 들어갈 수 없어요';
+}
+async function setAll(on){
+  const keys=[...Array(60)].map((_,i)=>PREFIX+String(i+1).padStart(2,'0'));
+  $('apvTxt').textContent='바꾸는 중…';
+  const {error}=await sbc.rpc('omok_set_approval',{p_pin:PIN,p_nums:keys,p_approved:on});
+  if(error){ $('apvTxt').textContent='바꾸지 못했어요. 다시 눌러 주세요.'; return; }
+  refreshApproval();
+}
+$('apvOff').onclick=()=>setAll(false);
+$('apvOn').onclick=()=>setAll(true);
+</script>
+</body>
+</html>
